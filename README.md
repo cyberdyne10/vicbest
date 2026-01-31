@@ -1,2 +1,0 @@
-# vicbest
-Autos/Groceries
