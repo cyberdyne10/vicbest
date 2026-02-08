@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Order Confirmed | Vicbest Store</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+  <div class="max-w-2xl mx-auto py-16 px-4 text-center">
+    <div class="bg-white p-8 rounded-xl shadow">
+      <h1 class="text-3xl font-bold text-green-600">Payment Status</h1>
+      <p id="status-text" class="mt-4 text-gray-700">Checking your payment confirmation...</p>
+      <div id="order-box" class="text-left mt-6 border rounded-lg p-4 hidden">
+        <h2 class="font-semibold mb-2">Order Details</h2>
+        <p><strong>Reference:</strong> <span id="ref"></span></p>
+        <p><strong>Status:</strong> <span id="status"></span></p>
+        <p><strong>Amount:</strong> ₦<span id="amount"></span></p>
+      </div>
+      <a href="/" class="inline-block mt-6 bg-blue-900 text-white px-5 py-3 rounded">Back to Store</a>
+    </div>
+  </div>
+  <script src="/success.js"></script>
+</body>
+</html>

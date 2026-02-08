@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checkout | Vicbest Store</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100">
+  <div class="max-w-5xl mx-auto py-10 px-4">
+    <a href="/" class="text-blue-700 font-semibold">← Continue Shopping</a>
+    <h1 class="text-3xl font-bold mt-2 mb-8">Checkout</h1>
+
+    <div class="grid md:grid-cols-2 gap-8">
+      <form id="checkout-form" class="bg-white p-6 rounded-xl shadow space-y-4">
+        <h2 class="font-bold text-xl">Customer Details</h2>
+        <input required name="name" placeholder="Full name" class="w-full border rounded p-3" />
+        <input required type="email" name="email" placeholder="Email address" class="w-full border rounded p-3" />
+        <input name="phone" placeholder="Phone number" class="w-full border rounded p-3" />
+        <textarea name="address" placeholder="Delivery address" class="w-full border rounded p-3"></textarea>
+        <textarea name="notes" placeholder="Order notes (optional)" class="w-full border rounded p-3"></textarea>
+        <button class="w-full bg-blue-900 text-white py-3 rounded font-semibold">Pay with Paystack</button>
+        <p id="error" class="text-red-600 text-sm"></p>
+      </form>
+
+      <div class="bg-white p-6 rounded-xl shadow">
+        <h2 class="font-bold text-xl mb-4">Order Summary</h2>
+        <div id="summary-items" class="space-y-2"></div>
+        <div class="mt-4 pt-3 border-t flex justify-between font-bold text-lg">
+          <span>Total</span><span id="summary-total">₦0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/checkout.js"></script>
+</body>
+</html>
