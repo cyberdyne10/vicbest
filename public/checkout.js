@@ -10,9 +10,23 @@ let products = [];
 let cart = JSON.parse(localStorage.getItem(CART_KEY) || '[]');
 
 async function init() {
-  const res = await fetch('/api/products');
-  const data = await res.json();
+  const [productsRes, meRes] = await Promise.all([
+    fetch('/api/products'),
+    fetch('/api/auth/me').catch(() => null),
+  ]);
+
+  const data = await productsRes.json();
   products = data.data || [];
+
+  if (meRes) {
+    const meData = await meRes.json();
+    const user = meData.data;
+    if (user) {
+      form.elements.name.value = user.name || '';
+      form.elements.email.value = user.email || '';
+    }
+  }
+
   renderSummary();
 }
 

@@ -74,6 +74,24 @@ async function applyMigrations() {
         );
       },
     },
+    {
+      name: "20260208_add_users_and_order_owner",
+      up: async () => {
+        await run(`CREATE TABLE IF NOT EXISTS users (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        if (!(await columnExists("orders", "user_id"))) {
+          await run(`ALTER TABLE orders ADD COLUMN user_id INTEGER REFERENCES users(id)`);
+          await run(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)`);
+        }
+      },
+    },
   ];
 
   for (const migration of migrations) {
@@ -121,8 +139,18 @@ async function initDb() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 
+  await run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   await run(`CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     customer_name TEXT NOT NULL,
     customer_email TEXT NOT NULL,
     customer_phone TEXT,
@@ -138,7 +166,8 @@ async function initDb() {
     delivered_at DATETIME,
     cancelled_at DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id)
   )`);
 
   await run(`CREATE TABLE IF NOT EXISTS order_items (
@@ -162,6 +191,9 @@ async function initDb() {
   )`);
 
   await applyMigrations();
+  if (await columnExists("orders", "user_id")) {
+    await run(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)`);
+  }
   await seedProducts();
 }
 

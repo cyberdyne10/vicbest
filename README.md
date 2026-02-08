@@ -1,66 +1,40 @@
-# Vicbest Store — Phase 2 Ecommerce + Admin Dashboard
+# Vicbest Store — Phase 3 (Auth + Accounts)
 
-Vicbest Store is now a full-stack ecommerce app with storefront/checkout + an admin dashboard.
+Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dashboard, and user authentication.
 
 ## Stack
 
-- **Node.js + Express** (API + server)
-- **SQLite** (products, orders, order items, cart snapshots)
-- **Vanilla frontend + Tailwind CDN**
-- **Paystack** (initialize + verify + webhook)
+- **Node.js + Express**
+- **SQLite**
+- **Vanilla JS + Tailwind CDN**
+- **Paystack**
+- **bcrypt** password hashing
 
-## Customer Features (unchanged from Phase 1)
+## Features
 
-- Product catalog API (`/api/products`) with seeded cars + groceries
-- Frontend storefront rendering from API
-- Cart storage in browser + optional sync (`/api/cart/sync`)
-- Checkout flow (`/checkout`) with order persistence
-- Paystack initialization (`/api/checkout/initialize`)
-- Verification endpoint (`/api/paystack/verify/:reference`)
-- Verified webhook endpoint (`/api/paystack/webhook`)
-- Success page (`/checkout/success`)
+### Storefront + Checkout
 
-## New Phase 2 Admin Features
+- Product catalog (`/api/products`) with seeded cars and groceries
+- Cart in browser + optional server sync (`/api/cart/sync`)
+- Checkout (`/checkout`) with Paystack initialization
+- Payment verification (`/api/paystack/verify/:reference`) + webhook (`/api/paystack/webhook`)
 
-- Admin login API (`/api/admin/login`) with env password
-- Protected admin product APIs:
-  - `GET /api/admin/products`
-  - `POST /api/admin/products`
-  - `PUT /api/admin/products/:id`
-  - `DELETE /api/admin/products/:id`
-- Protected admin order APIs:
-  - `GET /api/admin/orders?status=`
-  - `PATCH /api/admin/orders/:id/status`
-- Admin UI page at **`/admin`** to:
-  - Create/update/delete products
-  - View orders + items
-  - Update order status
+### User Accounts (Phase 3)
 
-## Order Status Flow
+- Sign up / login / logout
+- Password hashing with bcrypt (cost 12)
+- Signed auth token stored as **HTTP-only cookie**
+- Current user endpoint + profile endpoint
+- User-owned orders supported (`orders.user_id`) while preserving guest checkout
+- Navbar auth state on storefront/checkout pages
 
-Supported statuses:
+### Admin Dashboard (Phase 2)
 
-- `pending_payment`
-- `paid`
-- `processing`
-- `delivered`
-- `cancelled`
+- Admin login (`/api/admin/login`)
+- Manage products (`/api/admin/products` CRUD)
+- View/update orders (`/api/admin/orders`, `/api/admin/orders/:id/status`)
 
-Database migration support adds lifecycle timestamp fields:
-- `processing_at`
-- `delivered_at`
-- `cancelled_at`
-
-## Project Structure
-
-- `server.js` — Express routes (storefront + admin APIs)
-- `db.js` — SQLite setup, migrations, seeding
-- `public/`
-  - `index.html`, `main.js` — storefront
-  - `checkout.html`, `checkout.js` — checkout
-  - `success.html`, `success.js` — payment confirmation
-  - `admin.html`, `admin.js` — admin dashboard
-- `.env.example` — environment template
+---
 
 ## Setup
 
@@ -69,46 +43,79 @@ npm install
 npm start
 ```
 
-App default URL: `http://localhost:3000`
+Default URL: `http://localhost:3000`
 
 ## Environment Variables
 
-Create `.env` in the project root:
+Create `.env` from `.env.example`:
 
 ```env
 PORT=3000
 BASE_URL=http://localhost:3000
 
-PAYSTACK_SECRET_KEY=sk_test_REPLACE_WITH_YOUR_SECRET_KEY
-PAYSTACK_PUBLIC_KEY=pk_test_REPLACE_WITH_YOUR_PUBLIC_KEY
-PAYSTACK_WEBHOOK_SECRET=sk_test_REPLACE_WITH_WEBHOOK_SECRET
+PAYSTACK_SECRET_KEY=sk_test_REPLACE
+PAYSTACK_PUBLIC_KEY=pk_test_REPLACE
+PAYSTACK_WEBHOOK_SECRET=sk_test_REPLACE
 
-ADMIN_PASSWORD=replace_with_strong_admin_password
+ADMIN_PASSWORD=replace_with_strong_password
 ADMIN_TOKEN_SECRET=replace_with_long_random_string
+
+USER_TOKEN_SECRET=replace_with_another_long_random_string
 ```
 
 > Never commit real secrets.
 
-## Admin Login & Usage
+---
 
-1. Set `ADMIN_PASSWORD` in `.env`
-2. Start app: `npm start`
-3. Open: `http://localhost:3000/admin`
-4. Enter admin password
-5. Manage products/orders from the dashboard
+## Auth Endpoints
 
-### Admin Auth Notes
+### Register
 
-- Login returns a signed token (12-hour expiry)
-- Admin UI stores token in `localStorage`
-- Protected admin routes require `Authorization: Bearer <token>`
+`POST /api/auth/register`
 
-## Paystack Webhook Setup
-
-In Paystack dashboard, set webhook URL to:
-
-```text
-https://YOUR_DOMAIN/api/paystack/webhook
+```json
+{ "name": "Jane Doe", "email": "jane@example.com", "password": "strongpass123" }
 ```
 
-For local testing, expose local server (e.g. ngrok/cloudflared) and update `BASE_URL` accordingly.
+### Login
+
+`POST /api/auth/login`
+
+```json
+{ "email": "jane@example.com", "password": "strongpass123" }
+```
+
+### Logout
+
+`POST /api/auth/logout`
+
+### Current user (nullable)
+
+`GET /api/auth/me`
+
+### Profile (protected)
+
+`GET /api/profile`
+
+### My orders (protected)
+
+`GET /api/orders/me`
+
+---
+
+## Frontend Routes
+
+- `/` storefront
+- `/signup` user registration
+- `/login` user login
+- `/checkout` checkout
+- `/checkout/success` payment success page
+- `/admin` admin dashboard
+
+---
+
+## Notes on Order Access
+
+- Guest orders still work (no account required)
+- If checkout is done while logged in, the order is linked to `user_id`
+- `/api/orders/:reference` is restricted for linked orders (owner only)

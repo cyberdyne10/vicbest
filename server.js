@@ -1,5 +1,6 @@
 require("dotenv").config();
 const crypto = require("crypto");
+const bcrypt = require("bcrypt");
 const express = require("express");
 const path = require("path");
 const { initDb, all, get, run } = require("./db");
@@ -15,6 +16,16 @@ app.use("/api/paystack/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+function parseCookies(req) {
+  const cookieHeader = req.headers.cookie || "";
+  return cookieHeader.split(";").reduce((acc, pair) => {
+    const [rawKey, ...rest] = pair.trim().split("=");
+    if (!rawKey) return acc;
+    acc[rawKey] = decodeURIComponent(rest.join("="));
+    return acc;
+  }, {});
+}
+
 function formatProducts(rows) {
   return rows.map((p) => ({
     ...p,
@@ -26,20 +37,28 @@ function genRef() {
   return `VICBEST-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 }
 
+function normalizeEmail(email = "") {
+  return String(email).trim().toLowerCase();
+}
+
 function adminSecret() {
   return process.env.ADMIN_TOKEN_SECRET || process.env.ADMIN_PASSWORD || "vicbest-admin-secret";
 }
 
-function signAdminToken(payload) {
+function userSecret() {
+  return process.env.USER_TOKEN_SECRET || process.env.JWT_SECRET || "vicbest-user-secret";
+}
+
+function signToken(payload, secret) {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const sig = crypto.createHmac("sha256", adminSecret()).update(encoded).digest("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(encoded).digest("base64url");
   return `${encoded}.${sig}`;
 }
 
-function verifyAdminToken(token) {
+function verifyToken(token, secret) {
   if (!token || typeof token !== "string" || !token.includes(".")) return null;
   const [encoded, sig] = token.split(".");
-  const expected = crypto.createHmac("sha256", adminSecret()).update(encoded).digest("base64url");
+  const expected = crypto.createHmac("sha256", secret).update(encoded).digest("base64url");
   if (expected !== sig) return null;
   try {
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
@@ -48,6 +67,69 @@ function verifyAdminToken(token) {
   } catch {
     return null;
   }
+}
+
+function signAdminToken(payload) {
+  return signToken(payload, adminSecret());
+}
+
+function verifyAdminToken(token) {
+  return verifyToken(token, adminSecret());
+}
+
+function signUserToken(payload) {
+  return signToken(payload, userSecret());
+}
+
+function verifyUserToken(token) {
+  return verifyToken(token, userSecret());
+}
+
+function setUserAuthCookie(res, token) {
+  res.cookie("vicbest_user_token", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+    path: "/",
+  });
+}
+
+function clearUserAuthCookie(res) {
+  res.clearCookie("vicbest_user_token", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+  });
+}
+
+function userTokenFromRequest(req) {
+  const auth = req.headers.authorization || "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const cookies = parseCookies(req);
+  return bearer || cookies.vicbest_user_token || "";
+}
+
+async function attachUser(req, _, next) {
+  const payload = verifyUserToken(userTokenFromRequest(req));
+  if (!payload?.sub) {
+    req.user = null;
+    return next();
+  }
+
+  try {
+    const user = await get("SELECT id, name, email, created_at FROM users WHERE id = ?", [payload.sub]);
+    req.user = user || null;
+  } catch {
+    req.user = null;
+  }
+  next();
+}
+
+function requireUser(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+  next();
 }
 
 function requireAdmin(req, res, next) {
@@ -88,7 +170,82 @@ function toProductPayload(body = {}) {
   };
 }
 
+app.use(attachUser);
+
 app.get("/api/health", (_, res) => res.json({ ok: true }));
+
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    const email = normalizeEmail(req.body?.email || "");
+    const password = String(req.body?.password || "");
+
+    if (!name) return res.status(400).json({ error: "name is required" });
+    if (!email) return res.status(400).json({ error: "email is required" });
+    if (password.length < 8) return res.status(400).json({ error: "password must be at least 8 characters" });
+
+    const existing = await get("SELECT id FROM users WHERE email = ?", [email]);
+    if (existing) return res.status(409).json({ error: "Email already registered" });
+
+    const hash = await bcrypt.hash(password, 12);
+    const created = await run(
+      `INSERT INTO users (name, email, password_hash, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+      [name, email, hash]
+    );
+
+    const user = await get("SELECT id, name, email, created_at FROM users WHERE id = ?", [created.id]);
+    const token = signUserToken({ sub: user.id, role: "user", exp: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+    setUserAuthCookie(res, token);
+
+    res.status(201).json({ data: user });
+  } catch {
+    res.status(500).json({ error: "Registration failed" });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email || "");
+    const password = String(req.body?.password || "");
+
+    if (!email || !password) return res.status(400).json({ error: "email and password are required" });
+
+    const user = await get("SELECT * FROM users WHERE email = ?", [email]);
+    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+
+    const isValid = await bcrypt.compare(password, user.password_hash);
+    if (!isValid) return res.status(401).json({ error: "Invalid credentials" });
+
+    const token = signUserToken({ sub: user.id, role: "user", exp: Date.now() + 7 * 24 * 60 * 60 * 1000 });
+    setUserAuthCookie(res, token);
+
+    res.json({ data: { id: user.id, name: user.name, email: user.email, created_at: user.created_at } });
+  } catch {
+    res.status(500).json({ error: "Login failed" });
+  }
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  clearUserAuthCookie(res);
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/me", (req, res) => {
+  res.json({ data: req.user || null });
+});
+
+app.get("/api/profile", requireUser, (req, res) => {
+  res.json({ data: req.user });
+});
+
+app.get("/api/orders/me", requireUser, async (req, res) => {
+  try {
+    const orders = await all("SELECT * FROM orders WHERE user_id = ? ORDER BY created_at DESC", [req.user.id]);
+    res.json({ data: orders });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch your orders" });
+  }
+});
 
 app.post("/api/admin/login", (req, res) => {
   const configuredPassword = process.env.ADMIN_PASSWORD;
@@ -203,8 +360,11 @@ app.post("/api/cart/sync", async (req, res) => {
 
 app.post("/api/checkout/initialize", async (req, res) => {
   try {
-    const { customer, items } = req.body;
-    if (!customer?.name || !customer?.email || !Array.isArray(items) || items.length === 0) {
+    const { customer = {}, items } = req.body;
+    if ((!customer?.name || !customer?.email) && !req.user) {
+      return res.status(400).json({ error: "customer(name,email) and items are required" });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "customer(name,email) and items are required" });
     }
 
@@ -240,12 +400,16 @@ app.post("/api/checkout/initialize", async (req, res) => {
     }
 
     const reference = genRef();
+    const customerName = String(customer.name || req.user?.name || "").trim();
+    const customerEmail = normalizeEmail(customer.email || req.user?.email || "");
+
     const orderResult = await run(
-      `INSERT INTO orders (customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending_payment', ?)`,
+      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?)`,
       [
-        customer.name,
-        customer.email,
+        req.user?.id || null,
+        customerName,
+        customerEmail,
         customer.phone || "",
         customer.address || "",
         customer.notes || "",
@@ -273,13 +437,14 @@ app.post("/api/checkout/initialize", async (req, res) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        email: customer.email,
+        email: customerEmail,
         amount: amount * 100,
         reference,
         callback_url: `${BASE_URL}/checkout/success?reference=${reference}`,
         metadata: {
           orderId: orderResult.id,
-          customerName: customer.name,
+          userId: req.user?.id || null,
+          customerName,
         },
       }),
     });
@@ -364,6 +529,11 @@ app.get("/api/orders/:reference", async (req, res) => {
   try {
     const order = await get("SELECT * FROM orders WHERE payment_reference = ?", [req.params.reference]);
     if (!order) return res.status(404).json({ error: "Order not found" });
+
+    if (order.user_id && (!req.user || req.user.id !== order.user_id)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const items = await all("SELECT * FROM order_items WHERE order_id = ?", [order.id]);
     res.json({ data: { ...order, items } });
   } catch {
@@ -444,6 +614,14 @@ app.get("/checkout/success", (_, res) => {
 
 app.get("/admin", (_, res) => {
   res.sendFile(path.join(__dirname, "public", "admin.html"));
+});
+
+app.get("/login", (_, res) => {
+  res.sendFile(path.join(__dirname, "public", "login.html"));
+});
+
+app.get("/signup", (_, res) => {
+  res.sendFile(path.join(__dirname, "public", "signup.html"));
 });
 
 initDb().then(() => {
