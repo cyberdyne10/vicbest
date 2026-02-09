@@ -13,6 +13,10 @@ const orderFilter = document.getElementById('order-filter');
 
 const productForm = document.getElementById('product-form');
 const productFormMsg = document.getElementById('product-form-msg');
+const orderRefInput = document.getElementById('order-ref-input');
+const orderRefFindBtn = document.getElementById('order-ref-find');
+const orderRefCancelBtn = document.getElementById('order-ref-cancel');
+const orderRefMsg = document.getElementById('order-ref-msg');
 
 let products = [];
 let token = localStorage.getItem(ADMIN_TOKEN_KEY) || '';
@@ -167,6 +171,41 @@ async function fetchOrders() {
   });
 }
 
+function setOrderRefMessage(msg, kind = 'info') {
+  orderRefMsg.textContent = msg;
+  orderRefMsg.className = 'text-sm mb-3';
+  if (kind === 'success') orderRefMsg.classList.add('text-green-700');
+  if (kind === 'error') orderRefMsg.classList.add('text-red-700');
+  if (kind === 'info') orderRefMsg.classList.add('text-gray-600');
+}
+
+async function findOrderByReference(reference) {
+  const ref = String(reference || '').trim();
+  if (!ref) throw new Error('Enter an order reference first');
+
+  const res = await fetch('/api/admin/orders', { headers: authHeaders() });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to load orders');
+
+  const orders = data.data || [];
+  const order = orders.find((o) => String(o.payment_reference || '').toLowerCase() === ref.toLowerCase());
+  return order || null;
+}
+
+async function cancelOrderByReference(reference) {
+  const order = await findOrderByReference(reference);
+  if (!order) throw new Error('Order reference not found');
+
+  const res = await fetch(`/api/admin/orders/${order.id}/status`, {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ status: 'cancelled' }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to cancel order');
+  return data.data;
+}
+
 async function bootstrapDashboard() {
   setAuthState(true);
   try {
@@ -228,6 +267,35 @@ productForm.addEventListener('submit', async (e) => {
 
 document.getElementById('reset-product').addEventListener('click', resetProductForm);
 orderFilter.addEventListener('change', fetchOrders);
+
+orderRefFindBtn.addEventListener('click', async () => {
+  try {
+    setOrderRefMessage('Searching...', 'info');
+    const order = await findOrderByReference(orderRefInput.value);
+    if (!order) {
+      setOrderRefMessage('Order reference not found.', 'error');
+      return;
+    }
+    setOrderRefMessage(`Found Order #${order.id} (${order.status}) for ${order.customer_name}.`, 'success');
+  } catch (err) {
+    setOrderRefMessage(err.message || 'Unable to find order.', 'error');
+  }
+});
+
+orderRefCancelBtn.addEventListener('click', async () => {
+  try {
+    if (!orderRefInput.value.trim()) {
+      setOrderRefMessage('Enter an order reference first.', 'error');
+      return;
+    }
+    if (!confirm('Cancel this order by reference?')) return;
+    const updated = await cancelOrderByReference(orderRefInput.value);
+    setOrderRefMessage(`Order #${updated.id} has been set to cancelled.`, 'success');
+    await fetchOrders();
+  } catch (err) {
+    setOrderRefMessage(err.message || 'Unable to cancel order.', 'error');
+  }
+});
 
 logoutBtn.addEventListener('click', () => {
   token = '';

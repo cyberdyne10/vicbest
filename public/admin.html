@@ -97,15 +97,21 @@
       <div class="bg-white border rounded-2xl p-5">
         <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
           <h3 class="text-lg font-bold">Orders</h3>
-          <select id="order-filter" class="border rounded-lg px-3 py-2 text-sm">
-            <option value="">All statuses</option>
-            <option value="pending_payment">pending_payment</option>
-            <option value="paid">paid</option>
-            <option value="processing">processing</option>
-            <option value="delivered">delivered</option>
-            <option value="cancelled">cancelled</option>
-          </select>
+          <div class="flex flex-wrap items-center gap-2">
+            <input id="order-ref-input" placeholder="Find by order ref (e.g. VICBEST-...)" class="border rounded-lg px-3 py-2 text-sm min-w-[240px]" />
+            <button id="order-ref-find" class="px-3 py-2 rounded-lg bg-gray-200 text-sm font-semibold">Find</button>
+            <button id="order-ref-cancel" class="px-3 py-2 rounded-lg bg-red-600 text-white text-sm font-semibold">Cancel by Ref</button>
+            <select id="order-filter" class="border rounded-lg px-3 py-2 text-sm">
+              <option value="">All statuses</option>
+              <option value="pending_payment">pending_payment</option>
+              <option value="paid">paid</option>
+              <option value="processing">processing</option>
+              <option value="delivered">delivered</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+          </div>
         </div>
+        <p id="order-ref-msg" class="text-sm mb-3"></p>
         <div id="orders-wrap" class="space-y-4"></div>
       </div>
     </section>
