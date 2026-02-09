@@ -96,6 +96,14 @@ async function applyMigrations() {
         }
       },
     },
+    {
+      name: "20260210_add_product_stock_quantity",
+      up: async () => {
+        if (!(await columnExists("products", "stock_quantity"))) {
+          await run(`ALTER TABLE products ADD COLUMN stock_quantity INTEGER NOT NULL DEFAULT 10`);
+        }
+      },
+    },
   ];
 
   for (const migration of migrations) {
@@ -111,20 +119,20 @@ async function seedProducts() {
   if (row.count > 0) return;
 
   const products = [
-    ["2018 Toyota Camry", "car", 18500000, "Premium foreign used sedan", "https://images.unsplash.com/photo-1550355291-bbee04a92027?auto=format&fit=crop&w=800&q=80", '{"mileage":"45k mi","fuel":"Petrol","transmission":"Auto"}', 1],
-    ["2020 Lexus RX 350", "car", 45000000, "Luxury SUV, near-new condition", "https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?auto=format&fit=crop&w=800&q=80", '{"mileage":"12k mi","fuel":"Petrol","transmission":"Auto"}', 1],
-    ["2019 Mercedes GLK", "car", 28000000, "Well maintained executive SUV", "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=800&q=80", '{"mileage":"30k mi","fuel":"Petrol","transmission":"Auto"}', 1],
-    ["Long Grain Rice (50kg)", "grocery", 75000, "Stone-free premium long grain rice", "https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=400&q=80", '{"unit":"bag"}', 1],
-    ["Italian Pasta (20 packs)", "grocery", 12500, "Durum wheat pasta carton", "https://images.unsplash.com/photo-1621996346565-e3dbc646d9a9?auto=format&fit=crop&w=400&q=80", '{"unit":"carton"}', 1],
-    ["Fresh Beef (per kg)", "grocery", 4500, "Freshly cut beef", "https://images.unsplash.com/photo-1607623814075-e51df1bdc82f?auto=format&fit=crop&w=400&q=80", '{"unit":"kg"}', 1],
-    ["Vegetable Oil (5L)", "grocery", 10500, "Refined vegetable cooking oil", "https://images.unsplash.com/photo-1601039641847-7857b994d704?auto=format&fit=crop&w=400&q=80", '{"unit":"bottle"}', 1],
-    ["Beverage Pack", "grocery", 15000, "Assorted non-alcoholic drinks", "https://images.unsplash.com/photo-1598511726623-d2199042b5a8?auto=format&fit=crop&w=400&q=80", '{"unit":"case"}', 1],
+    ["2018 Toyota Camry", "car", 18500000, "Premium foreign used sedan", "https://images.unsplash.com/photo-1550355291-bbee04a92027?auto=format&fit=crop&w=800&q=80", '{"mileage":"45k mi","fuel":"Petrol","transmission":"Auto"}', 1, 3],
+    ["2020 Lexus RX 350", "car", 45000000, "Luxury SUV, near-new condition", "https://images.unsplash.com/photo-1533473359331-0135ef1b58bf?auto=format&fit=crop&w=800&q=80", '{"mileage":"12k mi","fuel":"Petrol","transmission":"Auto"}', 1, 2],
+    ["2019 Mercedes GLK", "car", 28000000, "Well maintained executive SUV", "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=800&q=80", '{"mileage":"30k mi","fuel":"Petrol","transmission":"Auto"}', 1, 1],
+    ["Long Grain Rice (50kg)", "grocery", 75000, "Stone-free premium long grain rice", "https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=400&q=80", '{"unit":"bag"}', 1, 12],
+    ["Italian Pasta (20 packs)", "grocery", 12500, "Durum wheat pasta carton", "https://images.unsplash.com/photo-1621996346565-e3dbc646d9a9?auto=format&fit=crop&w=400&q=80", '{"unit":"carton"}', 1, 8],
+    ["Fresh Beef (per kg)", "grocery", 4500, "Freshly cut beef", "https://images.unsplash.com/photo-1607623814075-e51df1bdc82f?auto=format&fit=crop&w=400&q=80", '{"unit":"kg"}', 1, 18],
+    ["Vegetable Oil (5L)", "grocery", 10500, "Refined vegetable cooking oil", "https://images.unsplash.com/photo-1601039641847-7857b994d704?auto=format&fit=crop&w=400&q=80", '{"unit":"bottle"}', 1, 9],
+    ["Beverage Pack", "grocery", 15000, "Assorted non-alcoholic drinks", "https://images.unsplash.com/photo-1598511726623-d2199042b5a8?auto=format&fit=crop&w=400&q=80", '{"unit":"case"}', 1, 5],
   ];
 
   for (const p of products) {
     await run(
-      `INSERT INTO products (name, category, price, description, image_url, metadata, in_stock)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO products (name, category, price, description, image_url, metadata, in_stock, stock_quantity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       p
     );
   }
@@ -140,6 +148,7 @@ async function initDb() {
     image_url TEXT,
     metadata TEXT,
     in_stock INTEGER DEFAULT 1,
+    stock_quantity INTEGER NOT NULL DEFAULT 10,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 

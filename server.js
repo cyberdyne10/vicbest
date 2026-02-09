@@ -11,6 +11,19 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const VALID_CATEGORIES = new Set(["car", "grocery"]);
 const ORDER_STATUSES = new Set(["pending_payment", "paid", "processing", "delivered", "cancelled"]);
+const MAX_INPUT_LENGTH = {
+  name: 120,
+  email: 160,
+  password: 200,
+  phone: 30,
+  address: 500,
+  notes: 1200,
+  productName: 160,
+  productDescription: 2000,
+  imageUrl: 1000,
+};
+
+const rateStore = new Map();
 
 app.use("/api/paystack/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
@@ -39,6 +52,35 @@ function genRef() {
 
 function normalizeEmail(email = "") {
   return String(email).trim().toLowerCase();
+}
+
+function safeText(value, max = 255) {
+  return String(value || "").trim().slice(0, max);
+}
+
+function getClientIp(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+function rateLimit({ windowMs, maxRequests }) {
+  return (req, res, next) => {
+    const key = `${req.path}:${getClientIp(req)}`;
+    const now = Date.now();
+    const hit = rateStore.get(key);
+    if (!hit || now > hit.resetAt) {
+      rateStore.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (hit.count >= maxRequests) {
+      return res.status(429).json({ error: "Too many requests. Please try again shortly." });
+    }
+    hit.count += 1;
+    next();
+  };
 }
 
 function adminSecret() {
@@ -134,7 +176,8 @@ function requireUser(req, res, next) {
 
 function requireAdmin(req, res, next) {
   const auth = req.headers.authorization || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const token = bearer || safeText(req.query?.token, 600);
   const payload = verifyAdminToken(token);
   if (!payload) return res.status(401).json({ error: "Unauthorized" });
   req.admin = payload;
@@ -142,12 +185,13 @@ function requireAdmin(req, res, next) {
 }
 
 function toProductPayload(body = {}) {
-  const name = String(body.name || "").trim();
+  const name = safeText(body.name, MAX_INPUT_LENGTH.productName);
   const category = String(body.category || "").trim();
   const price = Number(body.price);
-  const description = String(body.description || "").trim();
-  const image_url = String(body.image_url || "").trim();
+  const description = safeText(body.description, MAX_INPUT_LENGTH.productDescription);
+  const image_url = safeText(body.image_url, MAX_INPUT_LENGTH.imageUrl);
   const in_stock = body.in_stock ? 1 : 0;
+  const stock_quantity = Math.max(0, Number(body.stock_quantity) || 0);
 
   let metadata = body.metadata || {};
   if (typeof metadata === "string") {
@@ -162,11 +206,12 @@ function toProductPayload(body = {}) {
   if (!name) errors.push("name is required");
   if (!VALID_CATEGORIES.has(category)) errors.push("category must be 'car' or 'grocery'");
   if (!Number.isInteger(price) || price < 0) errors.push("price must be a non-negative integer");
+  if (!Number.isInteger(stock_quantity) || stock_quantity < 0) errors.push("stock_quantity must be a non-negative integer");
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) errors.push("metadata must be an object");
 
   return {
     errors,
-    data: { name, category, price, description, image_url, metadata: JSON.stringify(metadata), in_stock },
+    data: { name, category, price, description, image_url, metadata: JSON.stringify(metadata), in_stock, stock_quantity },
   };
 }
 
@@ -174,11 +219,11 @@ app.use(attachUser);
 
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 
-app.post("/api/auth/register", async (req, res) => {
+app.post("/api/auth/register", rateLimit({ windowMs: 60_000, maxRequests: 8 }), async (req, res) => {
   try {
-    const name = String(req.body?.name || "").trim();
-    const email = normalizeEmail(req.body?.email || "");
-    const password = String(req.body?.password || "");
+    const name = safeText(req.body?.name, MAX_INPUT_LENGTH.name);
+    const email = normalizeEmail(safeText(req.body?.email, MAX_INPUT_LENGTH.email));
+    const password = String(req.body?.password || "").slice(0, MAX_INPUT_LENGTH.password);
 
     if (!name) return res.status(400).json({ error: "name is required" });
     if (!email) return res.status(400).json({ error: "email is required" });
@@ -203,10 +248,10 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", rateLimit({ windowMs: 60_000, maxRequests: 10 }), async (req, res) => {
   try {
-    const email = normalizeEmail(req.body?.email || "");
-    const password = String(req.body?.password || "");
+    const email = normalizeEmail(safeText(req.body?.email, MAX_INPUT_LENGTH.email));
+    const password = String(req.body?.password || "").slice(0, MAX_INPUT_LENGTH.password);
 
     if (!email || !password) return res.status(400).json({ error: "email and password are required" });
 
@@ -247,7 +292,7 @@ app.get("/api/orders/me", requireUser, async (req, res) => {
   }
 });
 
-app.post("/api/admin/login", (req, res) => {
+app.post("/api/admin/login", rateLimit({ windowMs: 60_000, maxRequests: 12 }), (req, res) => {
   const configuredPassword = process.env.ADMIN_PASSWORD;
   if (!configuredPassword) {
     return res.status(500).json({ error: "ADMIN_PASSWORD is not configured" });
@@ -264,13 +309,44 @@ app.post("/api/admin/login", (req, res) => {
 
 app.get("/api/products", async (req, res) => {
   try {
-    const category = req.query.category;
-    const rows = category
+    const category = safeText(req.query.category, 30);
+    const search = safeText(req.query.search, 80).toLowerCase();
+    const inStockOnly = String(req.query.inStock || "") === "1";
+
+    let rows = category && VALID_CATEGORIES.has(category)
       ? await all("SELECT * FROM products WHERE category = ? ORDER BY id", [category])
       : await all("SELECT * FROM products ORDER BY id");
+
+    if (inStockOnly) rows = rows.filter((row) => Number(row.in_stock) === 1 && Number(row.stock_quantity || 0) > 0);
+    if (search) {
+      rows = rows.filter((row) => {
+        const hay = `${row.name || ""} ${row.description || ""}`.toLowerCase();
+        return hay.includes(search);
+      });
+    }
+
     res.json({ data: formatProducts(rows) });
   } catch {
     res.status(500).json({ error: "Failed to fetch products" });
+  }
+});
+
+app.get("/api/products/:id/related", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid product id" });
+
+    const current = await get("SELECT * FROM products WHERE id = ?", [id]);
+    if (!current) return res.status(404).json({ error: "Product not found" });
+
+    const rows = await all(
+      "SELECT * FROM products WHERE category = ? AND id != ? AND in_stock = 1 ORDER BY RANDOM() LIMIT 4",
+      [current.category, id]
+    );
+
+    res.json({ data: formatProducts(rows) });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch related products" });
   }
 });
 
@@ -289,9 +365,18 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
     if (errors.length > 0) return res.status(400).json({ error: errors.join(", ") });
 
     const result = await run(
-      `INSERT INTO products (name, category, price, description, image_url, metadata, in_stock)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [data.name, data.category, data.price, data.description, data.image_url, data.metadata, data.in_stock]
+      `INSERT INTO products (name, category, price, description, image_url, metadata, in_stock, stock_quantity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        data.name,
+        data.category,
+        data.price,
+        data.description,
+        data.image_url,
+        data.metadata,
+        data.in_stock,
+        data.stock_quantity,
+      ]
     );
 
     const row = await get("SELECT * FROM products WHERE id = ?", [result.id]);
@@ -314,9 +399,19 @@ app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
 
     await run(
       `UPDATE products
-       SET name = ?, category = ?, price = ?, description = ?, image_url = ?, metadata = ?, in_stock = ?
+       SET name = ?, category = ?, price = ?, description = ?, image_url = ?, metadata = ?, in_stock = ?, stock_quantity = ?
        WHERE id = ?`,
-      [data.name, data.category, data.price, data.description, data.image_url, data.metadata, data.in_stock, productId]
+      [
+        data.name,
+        data.category,
+        data.price,
+        data.description,
+        data.image_url,
+        data.metadata,
+        data.in_stock,
+        data.stock_quantity,
+        productId,
+      ]
     );
 
     const row = await get("SELECT * FROM products WHERE id = ?", [productId]);
@@ -341,11 +436,12 @@ app.delete("/api/admin/products/:id", requireAdmin, async (req, res) => {
 
 app.post("/api/cart/sync", async (req, res) => {
   try {
-    const { sessionId, cart } = req.body;
+    const sessionId = safeText(req.body?.sessionId, 120);
+    const cart = Array.isArray(req.body?.cart) ? req.body.cart : null;
     if (!sessionId || !Array.isArray(cart)) {
       return res.status(400).json({ error: "sessionId and cart[] are required" });
     }
-    const payload = JSON.stringify(cart);
+    const payload = JSON.stringify(cart.slice(0, 200));
     await run(
       `INSERT INTO cart_snapshots (session_id, payload, updated_at)
        VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -355,6 +451,27 @@ app.post("/api/cart/sync", async (req, res) => {
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "Failed to sync cart" });
+  }
+});
+
+app.get("/api/cart/snapshot/:sessionId", async (req, res) => {
+  try {
+    const sessionId = safeText(req.params.sessionId, 120);
+    if (!sessionId) return res.status(400).json({ error: "sessionId is required" });
+
+    const snapshot = await get("SELECT payload, updated_at FROM cart_snapshots WHERE session_id = ?", [sessionId]);
+    if (!snapshot) return res.json({ data: null });
+
+    let cart = [];
+    try {
+      cart = JSON.parse(snapshot.payload || "[]");
+    } catch {
+      cart = [];
+    }
+
+    res.json({ data: { cart, updated_at: snapshot.updated_at } });
+  } catch {
+    res.status(500).json({ error: "Failed to load cart snapshot" });
   }
 });
 
@@ -400,8 +517,11 @@ app.post("/api/orders/whatsapp", async (req, res) => {
     }
 
     const reference = genRef();
-    const customerName = String(customer.name || req.user?.name || "").trim();
-    const customerEmail = normalizeEmail(customer.email || req.user?.email || "");
+    const customerName = safeText(customer.name || req.user?.name || "", MAX_INPUT_LENGTH.name);
+    const customerEmail = normalizeEmail(safeText(customer.email || req.user?.email || "", MAX_INPUT_LENGTH.email));
+    const customerPhone = safeText(customer.phone, MAX_INPUT_LENGTH.phone);
+    const shippingAddress = safeText(customer.address, MAX_INPUT_LENGTH.address);
+    const customerNotes = safeText(customer.notes, MAX_INPUT_LENGTH.notes);
 
     const orderResult = await run(
       `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference)
@@ -410,9 +530,9 @@ app.post("/api/orders/whatsapp", async (req, res) => {
         req.user?.id || null,
         customerName,
         customerEmail,
-        customer.phone || "",
-        customer.address || "",
-        customer.notes || "",
+        customerPhone,
+        shippingAddress,
+        customerNotes,
         amount,
         reference,
       ]
@@ -481,8 +601,11 @@ app.post("/api/checkout/initialize", async (req, res) => {
     }
 
     const reference = genRef();
-    const customerName = String(customer.name || req.user?.name || "").trim();
-    const customerEmail = normalizeEmail(customer.email || req.user?.email || "");
+    const customerName = safeText(customer.name || req.user?.name || "", MAX_INPUT_LENGTH.name);
+    const customerEmail = normalizeEmail(safeText(customer.email || req.user?.email || "", MAX_INPUT_LENGTH.email));
+    const customerPhone = safeText(customer.phone, MAX_INPUT_LENGTH.phone);
+    const shippingAddress = safeText(customer.address, MAX_INPUT_LENGTH.address);
+    const customerNotes = safeText(customer.notes, MAX_INPUT_LENGTH.notes);
 
     const orderResult = await run(
       `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference)
@@ -491,9 +614,9 @@ app.post("/api/checkout/initialize", async (req, res) => {
         req.user?.id || null,
         customerName,
         customerEmail,
-        customer.phone || "",
-        customer.address || "",
-        customer.notes || "",
+        customerPhone,
+        shippingAddress,
+        customerNotes,
         amount,
         reference,
       ]
@@ -685,6 +808,68 @@ app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/api/admin/dashboard/metrics", requireAdmin, async (_, res) => {
+  try {
+    const [ordersCount, paidCount, revenue, productsCount, usersCount] = await Promise.all([
+      get("SELECT COUNT(*) AS total FROM orders"),
+      get("SELECT COUNT(*) AS total FROM orders WHERE status = 'paid'"),
+      get("SELECT COALESCE(SUM(amount), 0) AS total FROM orders WHERE status IN ('paid','processing','delivered')"),
+      get("SELECT COUNT(*) AS total FROM products"),
+      get("SELECT COUNT(*) AS total FROM users"),
+    ]);
+
+    res.json({
+      data: {
+        totalOrders: ordersCount?.total || 0,
+        paidOrders: paidCount?.total || 0,
+        revenue: revenue?.total || 0,
+        products: productsCount?.total || 0,
+        users: usersCount?.total || 0,
+      },
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch metrics" });
+  }
+});
+
+app.get("/api/admin/products/low-stock", requireAdmin, async (_, res) => {
+  try {
+    const rows = await all(
+      "SELECT id, name, category, stock_quantity, in_stock FROM products WHERE in_stock = 1 AND stock_quantity <= 5 ORDER BY stock_quantity ASC, id ASC"
+    );
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch low-stock products" });
+  }
+});
+
+app.get("/api/admin/orders/export.csv", requireAdmin, async (_, res) => {
+  try {
+    const rows = await all("SELECT * FROM orders ORDER BY created_at DESC");
+    const headers = [
+      "id",
+      "payment_reference",
+      "status",
+      "customer_name",
+      "customer_email",
+      "customer_phone",
+      "amount",
+      "currency",
+      "created_at",
+    ];
+    const escape = (value = "") => `"${String(value).replaceAll('"', '""')}"`;
+    const csv = [headers.join(",")]
+      .concat(rows.map((row) => headers.map((h) => escape(row[h] ?? "")).join(",")))
+      .join("\n");
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="orders-${Date.now()}.csv"`);
+    res.send(csv);
+  } catch {
+    res.status(500).json({ error: "Failed to export orders" });
+  }
+});
+
 app.get("/checkout", (_, res) => {
   res.sendFile(path.join(__dirname, "public", "checkout.html"));
 });
@@ -703,6 +888,12 @@ app.get("/login", (_, res) => {
 
 app.get("/signup", (_, res) => {
   res.sendFile(path.join(__dirname, "public", "signup.html"));
+});
+
+["about", "terms", "privacy", "contact"].forEach((page) => {
+  app.get(`/${page}`, (_, res) => {
+    res.sendFile(path.join(__dirname, "public", `${page}.html`));
+  });
 });
 
 initDb().then(() => {
