@@ -1,5 +1,6 @@
 const NGN = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 });
 const CART_KEY = 'vicbest_cart';
+const STORE_WHATSAPP_NUMBER = '2348091747685';
 
 const summaryItems = document.getElementById('summary-items');
 const summaryTotal = document.getElementById('summary-total');
@@ -30,17 +31,22 @@ async function init() {
   renderSummary();
 }
 
-function renderSummary() {
-  if (!cart.length) {
-    summaryItems.innerHTML = '<p class="text-gray-500">Your cart is empty.</p>';
-    return;
-  }
-
-  const merged = cart.map(item => {
+function getMergedCart() {
+  return cart.map(item => {
     const p = products.find(x => x.id === item.productId);
     if (!p) return null;
     return { ...item, name: p.name, price: p.price, line: p.price * item.quantity };
   }).filter(Boolean);
+}
+
+function renderSummary() {
+  if (!cart.length) {
+    summaryItems.innerHTML = '<p class="text-gray-500">Your cart is empty.</p>';
+    summaryTotal.textContent = NGN.format(0);
+    return;
+  }
+
+  const merged = getMergedCart();
 
   summaryItems.innerHTML = merged.map(m => `<div class="flex justify-between"><span>${m.name} × ${m.quantity}</span><span>${NGN.format(m.line)}</span></div>`).join('');
   const total = merged.reduce((sum, m) => sum + m.line, 0);
@@ -58,26 +64,39 @@ form.addEventListener('submit', async (e) => {
 
   const fd = new FormData(form);
   const customer = {
-    name: fd.get('name'),
-    email: fd.get('email'),
-    phone: fd.get('phone'),
-    address: fd.get('address'),
-    notes: fd.get('notes'),
+    name: (fd.get('name') || '').toString().trim(),
+    email: (fd.get('email') || '').toString().trim(),
+    phone: (fd.get('phone') || '').toString().trim(),
+    address: (fd.get('address') || '').toString().trim(),
+    notes: (fd.get('notes') || '').toString().trim(),
   };
 
-  const response = await fetch('/api/checkout/initialize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ customer, items: cart }),
-  });
-
-  const data = await response.json();
-  if (!response.ok || !data.status) {
-    errorBox.textContent = data.error || 'Unable to initialize payment';
+  if (!customer.name || !customer.email) {
+    errorBox.textContent = 'Please provide your name and email.';
     return;
   }
 
-  window.location.href = data.data.authorization_url;
+  const merged = getMergedCart();
+  const total = merged.reduce((sum, m) => sum + m.line, 0);
+
+  const lines = [
+    'Hello Vicbest Store, I want to complete this order:',
+    '',
+    ...merged.map((m, i) => `${i + 1}. ${m.name} x ${m.quantity} - ${NGN.format(m.line)}`),
+    '',
+    `Total: ${NGN.format(total)}`,
+    '',
+    `Name: ${customer.name}`,
+    `Email: ${customer.email}`,
+    `Phone: ${customer.phone || '-'}`,
+    `Address: ${customer.address || '-'}`,
+    `Notes: ${customer.notes || '-'}`,
+  ];
+
+  const text = encodeURIComponent(lines.join('\n'));
+  const whatsappUrl = `https://wa.me/${STORE_WHATSAPP_NUMBER}?text=${text}`;
+
+  window.location.href = whatsappUrl;
 });
 
 init();
