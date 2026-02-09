@@ -1,153 +1,82 @@
 const NGN = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 });
 const CART_KEY = 'vicbest_cart';
-
 const carsGrid = document.getElementById('cars-grid');
 const groceriesGrid = document.getElementById('groceries-grid');
-const cartCount = document.getElementById('cart-count');
-const cartCountMobile = document.getElementById('cart-count-mobile');
+const relatedGrid = document.getElementById('related-products');
 const cartItems = document.getElementById('cart-items');
 const cartTotal = document.getElementById('cart-total');
-const drawer = document.getElementById('cart-drawer');
-const overlay = document.getElementById('cart-overlay');
-
-const cart = JSON.parse(localStorage.getItem(CART_KEY) || '[]');
-let products = [];
-
+const searchInput = document.getElementById('product-search');
+const stockToggle = document.getElementById('in-stock-only');
+let cart = JSON.parse(localStorage.getItem(CART_KEY) || '[]');
+let products = []; let activeCategory = ''; let searchTimer;
 const sessionId = localStorage.getItem('vicbest_session') || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 localStorage.setItem('vicbest_session', sessionId);
 
-async function fetchProducts() {
-  const res = await fetch('/api/products');
+async function restoreCart() {
+  if (cart.length) return;
+  const res = await fetch(`/api/cart/snapshot/${encodeURIComponent(sessionId)}`).catch(() => null);
+  if (!res?.ok) return;
   const data = await res.json();
-  products = data.data || [];
-  renderProducts();
-  renderCart();
+  if (data.data?.cart?.length) { cart = data.data.cart; saveCart(); }
+}
+
+async function fetchProducts() {
+  const params = new URLSearchParams();
+  if (activeCategory) params.set('category', activeCategory);
+  if (searchInput.value.trim()) params.set('search', searchInput.value.trim());
+  if (stockToggle.checked) params.set('inStock', '1');
+  const res = await fetch(`/api/products?${params.toString()}`);
+  const data = await res.json(); products = data.data || [];
+  renderProducts(); renderCart(); renderRelated();
 }
 
 function productCard(p) {
-  const button = `<button data-id="${p.id}" class="add-cart mt-3 w-full bg-blue-900 text-white py-2 rounded-lg">Add to Cart</button>`;
-  if (p.category === 'car') {
-    return `<div class="bg-white rounded-2xl shadow-lg overflow-hidden border border-gray-100">
-      <img src="${p.image_url}" alt="${p.name}" class="w-full h-56 object-cover">
-      <div class="p-5">
-        <h3 class="text-xl font-bold">${p.name}</h3>
-        <p class="text-gray-500 text-sm mt-1">${p.description || ''}</p>
-        <div class="mt-4 font-bold text-blue-900 text-2xl">${NGN.format(p.price)}</div>
-        ${button}
-      </div>
-    </div>`;
-  }
-  return `<div class="bg-white p-4 rounded-2xl shadow border border-gray-100">
-    <img src="${p.image_url}" alt="${p.name}" class="w-full h-36 object-cover rounded-lg mb-3">
-    <h3 class="font-bold">${p.name}</h3>
-    <div class="mt-2 font-semibold text-green-600">${NGN.format(p.price)}</div>
-    ${button}
-  </div>`;
+  const out = !p.in_stock || Number(p.stock_quantity) <= 0;
+  return `<div class="bg-white rounded-2xl shadow overflow-hidden border"><img loading="lazy" src="${p.image_url}" alt="${p.name}" class="w-full ${p.category === 'car' ? 'h-56' : 'h-36'} object-cover"><div class="p-4"><h3 class="font-bold">${p.name}</h3><p class="text-sm text-gray-500">${p.description || ''}</p><div class="mt-2 font-semibold text-blue-900">${NGN.format(p.price)}</div><p class="text-xs ${out ? 'text-red-600' : 'text-green-600'}">${out ? 'Out of stock' : `In stock: ${p.stock_quantity ?? '-'}`}</p><button data-id="${p.id}" class="add-cart mt-3 w-full ${out ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-900 text-white'} py-2 rounded-lg" ${out ? 'disabled' : ''}>${out ? 'Unavailable' : 'Add to Cart'}</button></div></div>`;
 }
 
 function renderProducts() {
-  carsGrid.innerHTML = products.filter((p) => p.category === 'car').map(productCard).join('');
-  groceriesGrid.innerHTML = products.filter((p) => p.category === 'grocery').map(productCard).join('');
-
-  document.querySelectorAll('.add-cart').forEach((btn) => {
-    btn.addEventListener('click', () => addToCart(Number(btn.dataset.id)));
-  });
+  carsGrid.innerHTML = products.filter((p) => p.category === 'car').map(productCard).join('') || '<p class="text-gray-500">No vehicles found.</p>';
+  groceriesGrid.innerHTML = products.filter((p) => p.category === 'grocery').map(productCard).join('') || '<p class="text-gray-500">No groceries found.</p>';
+  document.querySelectorAll('.add-cart').forEach((btn) => btn.addEventListener('click', () => addToCart(Number(btn.dataset.id))));
 }
 
-function addToCart(productId) {
-  const existing = cart.find((i) => i.productId === productId);
-  if (existing) existing.quantity += 1;
-  else cart.push({ productId, quantity: 1 });
-  saveCart();
-  renderCart();
-}
-
-function removeItem(productId) {
-  const idx = cart.findIndex((i) => i.productId === productId);
-  if (idx >= 0) cart.splice(idx, 1);
-  saveCart();
-  renderCart();
+function renderRelated() {
+  const list = products.slice(0, 4);
+  relatedGrid.innerHTML = list.map((p) => `<div class="bg-white border rounded-lg p-3"><p class="font-semibold text-sm">${p.name}</p><p class="text-xs text-gray-500">${p.category}</p><p class="font-bold mt-1">${NGN.format(p.price)}</p></div>`).join('');
 }
 
 function saveCart() {
   localStorage.setItem(CART_KEY, JSON.stringify(cart));
-  fetch('/api/cart/sync', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, cart }),
-  }).catch(() => {});
+  fetch('/api/cart/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId, cart }) }).catch(() => {});
 }
+
+function addToCart(productId) { const x = cart.find((i) => i.productId === productId); if (x) x.quantity += 1; else cart.push({ productId, quantity: 1 }); saveCart(); renderCart(); }
+function removeItem(productId) { cart = cart.filter((i) => i.productId !== productId); saveCart(); renderCart(); }
 
 function renderCart() {
-  const count = cart.reduce((sum, i) => sum + i.quantity, 0);
-  if (cartCount) cartCount.textContent = count;
-  if (cartCountMobile) cartCountMobile.textContent = count;
-
-  if (cart.length === 0) {
-    cartItems.innerHTML = '<p class="text-gray-500">Your cart is empty.</p>';
-    cartTotal.textContent = NGN.format(0);
-    return;
-  }
-
-  const merged = cart
-    .map((item) => {
-      const p = products.find((x) => x.id === item.productId);
-      if (!p) return null;
-      return { ...item, product: p, line: p.price * item.quantity };
-    })
-    .filter(Boolean);
-
-  cartItems.innerHTML = merged
-    .map(
-      (m) => `<div class="border rounded-lg p-3">
-      <p class="font-semibold">${m.product.name}</p>
-      <p class="text-sm text-gray-500">Qty: ${m.quantity}</p>
-      <div class="flex justify-between mt-2">
-        <span>${NGN.format(m.line)}</span>
-        <button data-remove="${m.product.id}" class="text-red-600 text-sm">Remove</button>
-      </div>
-    </div>`
-    )
-    .join('');
-
-  const total = merged.reduce((sum, m) => sum + m.line, 0);
-  cartTotal.textContent = NGN.format(total);
-
-  document.querySelectorAll('[data-remove]').forEach((btn) => {
-    btn.addEventListener('click', () => removeItem(Number(btn.dataset.remove)));
-  });
+  const count = cart.reduce((s, i) => s + i.quantity, 0);
+  ['cart-count', 'cart-count-mobile'].forEach((id) => { const el = document.getElementById(id); if (el) el.textContent = count; });
+  const merged = cart.map((item) => { const p = products.find((x) => x.id === item.productId); return p ? { ...item, p, line: p.price * item.quantity } : null; }).filter(Boolean);
+  cartItems.innerHTML = merged.length ? merged.map((m) => `<div class="border rounded-lg p-3"><p class="font-semibold">${m.p.name}</p><div class="flex justify-between mt-2"><span>${NGN.format(m.line)}</span><button data-remove="${m.p.id}" class="text-red-600 text-sm">Remove</button></div></div>`).join('') : '<p class="text-gray-500">Your cart is empty.</p>';
+  cartTotal.textContent = NGN.format(merged.reduce((s, m) => s + m.line, 0));
+  document.querySelectorAll('[data-remove]').forEach((btn) => btn.addEventListener('click', () => removeItem(Number(btn.dataset.remove))));
 }
 
-function openDrawer() {
-  drawer.classList.remove('translate-x-full');
-  overlay.classList.remove('hidden');
+function initUI() {
+  document.getElementById('open-cart-btn')?.addEventListener('click', () => document.getElementById('cart-drawer').classList.remove('translate-x-full'));
+  document.getElementById('open-cart-btn-mobile')?.addEventListener('click', () => document.getElementById('cart-drawer').classList.remove('translate-x-full'));
+  document.getElementById('close-cart-btn')?.addEventListener('click', () => document.getElementById('cart-drawer').classList.add('translate-x-full'));
+  document.getElementById('cart-overlay')?.addEventListener('click', () => document.getElementById('cart-drawer').classList.add('translate-x-full'));
+  document.getElementById('mobile-menu-btn')?.addEventListener('click', () => document.getElementById('mobile-menu').classList.toggle('hidden'));
+  document.querySelectorAll('.chip').forEach((chip) => chip.addEventListener('click', () => {
+    activeCategory = chip.dataset.category || '';
+    document.querySelectorAll('.chip').forEach((c) => c.className = 'chip px-3 py-2 text-sm rounded-full bg-gray-100');
+    chip.className = 'chip px-3 py-2 text-sm rounded-full bg-blue-900 text-white';
+    fetchProducts();
+  }));
+  stockToggle?.addEventListener('change', fetchProducts);
+  searchInput?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(fetchProducts, 250); });
 }
 
-function closeDrawer() {
-  drawer.classList.add('translate-x-full');
-  overlay.classList.add('hidden');
-}
-
-document.getElementById('open-cart-btn')?.addEventListener('click', openDrawer);
-document.getElementById('open-cart-btn-mobile')?.addEventListener('click', openDrawer);
-document.getElementById('close-cart-btn')?.addEventListener('click', closeDrawer);
-overlay?.addEventListener('click', closeDrawer);
-
-const mobileMenuBtn = document.getElementById('mobile-menu-btn');
-const mobileMenu = document.getElementById('mobile-menu');
-if (mobileMenuBtn && mobileMenu) {
-  mobileMenuBtn.addEventListener('click', () => {
-    mobileMenu.classList.toggle('hidden');
-    const icon = mobileMenuBtn.querySelector('i');
-    if (icon) {
-      icon.classList.toggle('fa-bars');
-      icon.classList.toggle('fa-times');
-    }
-  });
-
-  mobileMenu.querySelectorAll('a').forEach((a) => {
-    a.addEventListener('click', () => mobileMenu.classList.add('hidden'));
-  });
-}
-
-fetchProducts();
+(async function boot() { await restoreCart(); initUI(); await fetchProducts(); })();

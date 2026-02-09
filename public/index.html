@@ -4,83 +4,47 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vicbest Store | Cars & Groceries</title>
+  <meta name="description" content="Shop verified cars and fresh groceries in one trusted marketplace with secure checkout and fast support." />
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
 </head>
 <body class="bg-gray-50 font-sans">
   <nav class="bg-white/95 backdrop-blur-md shadow-sm sticky top-0 z-50">
     <div class="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
-      <a href="#" class="text-2xl font-extrabold text-blue-900">VICBEST<span class="text-orange-500">STORE</span></a>
+      <a href="/" class="text-2xl font-extrabold text-blue-900">VICBEST<span class="text-orange-500">STORE</span></a>
       <div class="hidden md:flex space-x-6 font-medium text-gray-600 items-center">
-        <a href="#cars" class="hover:text-blue-800">Vehicles</a>
-        <a href="#groceries" class="hover:text-blue-800">Groceries</a>
-        <a href="#contact" class="hover:text-blue-800">Contact</a>
+        <a href="#cars" class="hover:text-blue-800">Vehicles</a><a href="#groceries" class="hover:text-blue-800">Groceries</a>
+        <a href="#why-us" class="hover:text-blue-800">Why Us</a><a href="/about" class="hover:text-blue-800">About</a>
         <div id="auth-nav" class="flex items-center gap-3 text-sm"></div>
-        <button id="open-cart-btn" class="bg-orange-500 text-white px-4 py-2 rounded-full font-semibold">
-          <i class="fas fa-shopping-cart"></i> Cart <span id="cart-count" class="ml-1">0</span>
-        </button>
+        <button id="open-cart-btn" class="bg-orange-500 text-white px-4 py-2 rounded-full font-semibold"><i class="fas fa-shopping-cart"></i> Cart <span id="cart-count" class="ml-1">0</span></button>
       </div>
-
-      <button id="mobile-menu-btn" class="md:hidden text-2xl text-gray-700" aria-label="Open menu">
-        <i class="fas fa-bars"></i>
-      </button>
+      <button id="mobile-menu-btn" class="md:hidden text-2xl text-gray-700" aria-label="Open menu"><i class="fas fa-bars"></i></button>
     </div>
-
-    <div id="mobile-menu" class="hidden md:hidden border-t bg-white">
-      <div class="px-4 py-4 space-y-3 text-gray-700 font-medium">
-        <a href="#cars" class="block">Vehicles</a>
-        <a href="#groceries" class="block">Groceries</a>
-        <a href="#contact" class="block">Contact</a>
-        <div id="auth-nav-mobile" class="flex flex-col gap-2 text-sm"></div>
-        <button id="open-cart-btn-mobile" class="w-full bg-orange-500 text-white px-4 py-2 rounded-lg font-semibold text-left">
-          <i class="fas fa-shopping-cart"></i> Cart <span id="cart-count-mobile" class="ml-1">0</span>
-        </button>
-      </div>
-    </div>
+    <div id="mobile-menu" class="hidden md:hidden border-t bg-white"><div class="px-4 py-4 space-y-3 text-gray-700 font-medium"><a href="#cars" class="block">Vehicles</a><a href="#groceries" class="block">Groceries</a><a href="#why-us" class="block">Why Us</a><a href="/about" class="block">About</a><div id="auth-nav-mobile" class="flex flex-col gap-2 text-sm"></div><button id="open-cart-btn-mobile" class="w-full bg-orange-500 text-white px-4 py-2 rounded-lg font-semibold text-left"><i class="fas fa-shopping-cart"></i> Cart <span id="cart-count-mobile" class="ml-1">0</span></button></div></div>
   </nav>
 
-  <header class="relative h-[520px] flex items-center justify-center text-center text-white overflow-hidden">
-    <div class="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1920&q=80')] bg-cover bg-center"></div>
-    <div class="absolute inset-0 bg-gradient-to-r from-blue-900/90 to-blue-800/80"></div>
-    <div class="relative z-10 px-4 max-w-4xl mx-auto">
-      <h1 class="text-5xl md:text-7xl font-extrabold mb-4">Drive Your Dream. <span class="text-orange-400">Eat Fresh.</span></h1>
-      <p class="text-xl">Order quality vehicles and daily groceries with secure online checkout.</p>
-    </div>
+  <header class="relative h-[500px] flex items-center justify-center text-center text-white overflow-hidden">
+    <div class="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&w=1920&q=80')] bg-cover bg-center"></div><div class="absolute inset-0 bg-gradient-to-r from-blue-900/90 to-blue-800/80"></div>
+    <div class="relative z-10 px-4 max-w-4xl mx-auto"><h1 class="text-5xl md:text-7xl font-extrabold mb-4">Drive Your Dream. <span class="text-orange-400">Eat Fresh.</span></h1><p class="text-xl">Order quality vehicles and daily groceries with secure checkout.</p></div>
   </header>
 
-  <section id="cars" class="max-w-7xl mx-auto px-4 py-16">
-    <h2 class="text-4xl font-extrabold text-gray-900 mb-8">Available Vehicles</h2>
-    <div id="cars-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"></div>
+  <section class="max-w-7xl mx-auto px-4 py-6"><div class="bg-white border rounded-2xl p-4 md:p-5 flex flex-col md:flex-row gap-3 md:items-center"><input id="product-search" placeholder="Search products..." class="flex-1 border rounded-lg px-3 py-2" /><div id="category-chips" class="flex gap-2 flex-wrap"><button data-category="" class="chip px-3 py-2 text-sm rounded-full bg-blue-900 text-white">All</button><button data-category="car" class="chip px-3 py-2 text-sm rounded-full bg-gray-100">Cars</button><button data-category="grocery" class="chip px-3 py-2 text-sm rounded-full bg-gray-100">Groceries</button></div><label class="text-sm inline-flex items-center gap-2"><input id="in-stock-only" type="checkbox" /> In stock only</label></div></section>
+
+  <section id="cars" class="max-w-7xl mx-auto px-4 py-10"><h2 class="text-4xl font-extrabold text-gray-900 mb-8">Available Vehicles</h2><div id="cars-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"></div></section>
+  <section id="groceries" class="bg-gray-50 py-10"><div class="max-w-7xl mx-auto px-4"><h2 class="text-4xl font-extrabold text-gray-900 mb-8">Fresh Groceries</h2><div id="groceries-grid" class="grid grid-cols-2 md:grid-cols-4 gap-6"></div></div></section>
+
+  <section id="why-us" class="max-w-7xl mx-auto px-4 py-12">
+    <h2 class="text-3xl font-extrabold mb-6">Why customers trust Vicbest</h2>
+    <div class="grid md:grid-cols-4 gap-4 mb-8 text-sm"><div class="bg-white p-4 rounded-xl border">✅ Verified sellers</div><div class="bg-white p-4 rounded-xl border">🚚 Nationwide delivery</div><div class="bg-white p-4 rounded-xl border">↩️ 7-day return support*</div><div class="bg-white p-4 rounded-xl border">🛡️ Warranty-backed listings</div></div>
+    <div class="grid md:grid-cols-3 gap-4"><div class="bg-white border rounded-xl p-4"><p class="font-semibold">“Very transparent process and smooth delivery.”</p><p class="text-xs text-gray-500 mt-2">— Chika, Lagos</p></div><div class="bg-white border rounded-xl p-4"><p class="font-semibold">“Got my groceries same day. Fresh and neatly packed.”</p><p class="text-xs text-gray-500 mt-2">— Tunde, Ikeja</p></div><div class="bg-white border rounded-xl p-4"><p class="font-semibold">“The car condition matched exactly what was posted.”</p><p class="text-xs text-gray-500 mt-2">— Ada, Abuja</p></div></div>
   </section>
 
-  <section id="groceries" class="bg-gray-50 py-16">
-    <div class="max-w-7xl mx-auto px-4">
-      <h2 class="text-4xl font-extrabold text-gray-900 mb-8">Fresh Groceries</h2>
-      <div id="groceries-grid" class="grid grid-cols-2 md:grid-cols-4 gap-6"></div>
-    </div>
-  </section>
+  <section class="max-w-7xl mx-auto px-4 pb-10"><h3 class="text-xl font-bold mb-3">Related picks</h3><div id="related-products" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div></section>
 
-  <aside id="cart-drawer" class="fixed top-0 right-0 h-full w-full sm:w-[420px] bg-white shadow-2xl transform translate-x-full transition-transform duration-300 z-[60] flex flex-col">
-    <div class="p-5 border-b flex justify-between items-center">
-      <h3 class="text-xl font-bold">Your Cart</h3>
-      <button id="close-cart-btn" class="text-gray-500"><i class="fas fa-times text-xl"></i></button>
-    </div>
-    <div id="cart-items" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
-    <div class="p-4 border-t">
-      <div class="flex justify-between mb-3"><span>Total</span><strong id="cart-total">₦0</strong></div>
-      <a href="/checkout" class="block w-full text-center bg-blue-900 text-white py-3 rounded-lg font-semibold">Proceed to Checkout</a>
-    </div>
-  </aside>
+  <aside id="cart-drawer" class="fixed top-0 right-0 h-full w-full sm:w-[420px] bg-white shadow-2xl transform translate-x-full transition-transform duration-300 z-[60] flex flex-col"><div class="p-5 border-b flex justify-between items-center"><h3 class="text-xl font-bold">Your Cart</h3><button id="close-cart-btn" class="text-gray-500"><i class="fas fa-times text-xl"></i></button></div><div id="cart-items" class="flex-1 overflow-y-auto p-4 space-y-3"></div><div class="p-4 border-t"><div class="flex justify-between mb-3"><span>Total</span><strong id="cart-total">₦0</strong></div><a href="/checkout" class="block w-full text-center bg-blue-900 text-white py-3 rounded-lg font-semibold">Proceed to Checkout</a></div></aside>
   <div id="cart-overlay" class="fixed inset-0 bg-black/40 hidden z-50"></div>
 
-  <footer id="contact" class="bg-gray-900 text-white py-12 mt-8">
-    <div class="max-w-7xl mx-auto px-4 text-center">
-      <h4 class="text-2xl font-extrabold">VICBEST<span class="text-orange-500">STORE</span></h4>
-      <p class="text-gray-400 mt-2">+234 809 174 7685 • hello@vicbeststore.com</p>
-    </div>
-  </footer>
-
-  <script src="/auth.js"></script>
-  <script src="/main.js"></script>
+  <footer id="contact" class="bg-gray-900 text-white py-12 mt-8"><div class="max-w-7xl mx-auto px-4 text-center"><h4 class="text-2xl font-extrabold">VICBEST<span class="text-orange-500">STORE</span></h4><p class="text-gray-400 mt-2">+234 809 174 7685 • hello@vicbeststore.com</p><div class="mt-4 text-sm text-gray-300 space-x-3"><a href="/about">About</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/contact">Contact</a></div></div></footer>
+  <script src="/auth.js" defer></script><script src="/main.js" defer></script>
 </body>
 </html>
