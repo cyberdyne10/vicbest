@@ -2,10 +2,14 @@ const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 
-const dataDir = path.join(__dirname, "data");
-if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+const configuredDbPath = process.env.SQLITE_PATH;
+const defaultDbPath = path.join(__dirname, "data", "vicbest.db");
+const dbPath = configuredDbPath ? path.resolve(configuredDbPath) : defaultDbPath;
 
-const db = new sqlite3.Database(path.join(dataDir, "vicbest.db"));
+const dbDir = path.dirname(dbPath);
+if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+
+const db = new sqlite3.Database(dbPath);
 
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
