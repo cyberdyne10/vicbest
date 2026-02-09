@@ -76,13 +76,26 @@ form.addEventListener('submit', async (e) => {
     return;
   }
 
-  const merged = getMergedCart();
-  const total = merged.reduce((sum, m) => sum + m.line, 0);
+  const orderRes = await fetch('/api/orders/whatsapp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customer, items: cart }),
+  });
+
+  const orderData = await orderRes.json();
+  if (!orderRes.ok) {
+    errorBox.textContent = orderData.error || 'Unable to create order record';
+    return;
+  }
+
+  const order = orderData.data;
+  const total = Number(order.amount || 0);
 
   const lines = [
     'Hello Vicbest Store, I want to complete this order:',
+    `Order Ref: ${order.reference}`,
     '',
-    ...merged.map((m, i) => `${i + 1}. ${m.name} x ${m.quantity} - ${NGN.format(m.line)}`),
+    ...order.items.map((m, i) => `${i + 1}. ${m.productName} x ${m.quantity} - ${NGN.format(m.lineTotal)}`),
     '',
     `Total: ${NGN.format(total)}`,
     '',

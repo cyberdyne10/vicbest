@@ -358,6 +358,87 @@ app.post("/api/cart/sync", async (req, res) => {
   }
 });
 
+app.post("/api/orders/whatsapp", async (req, res) => {
+  try {
+    const { customer = {}, items } = req.body;
+    if ((!customer?.name || !customer?.email) && !req.user) {
+      return res.status(400).json({ error: "customer(name,email) and items are required" });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "customer(name,email) and items are required" });
+    }
+
+    const productIds = [...new Set(items.map((i) => Number(i.productId)).filter((id) => Number.isInteger(id) && id > 0))];
+    if (productIds.length === 0) return res.status(400).json({ error: "No valid cart items" });
+
+    const products = await all(
+      `SELECT id, name, price FROM products WHERE id IN (${productIds.map(() => "?").join(",")})`,
+      productIds
+    );
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    let amount = 0;
+    const normalizedItems = [];
+
+    for (const item of items) {
+      const product = productMap.get(Number(item.productId));
+      const quantity = Number(item.quantity) || 1;
+      if (!product || quantity <= 0) continue;
+      const lineTotal = product.price * quantity;
+      amount += lineTotal;
+      normalizedItems.push({
+        productId: product.id,
+        productName: product.name,
+        quantity,
+        unitPrice: product.price,
+        lineTotal,
+      });
+    }
+
+    if (normalizedItems.length === 0) {
+      return res.status(400).json({ error: "No valid cart items" });
+    }
+
+    const reference = genRef();
+    const customerName = String(customer.name || req.user?.name || "").trim();
+    const customerEmail = normalizeEmail(customer.email || req.user?.email || "");
+
+    const orderResult = await run(
+      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', ?)`,
+      [
+        req.user?.id || null,
+        customerName,
+        customerEmail,
+        customer.phone || "",
+        customer.address || "",
+        customer.notes || "",
+        amount,
+        reference,
+      ]
+    );
+
+    for (const i of normalizedItems) {
+      await run(
+        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, line_total)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [orderResult.id, i.productId, i.productName, i.quantity, i.unitPrice, i.lineTotal]
+      );
+    }
+
+    res.status(201).json({
+      data: {
+        orderId: orderResult.id,
+        reference,
+        amount,
+        items: normalizedItems,
+      },
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to create WhatsApp order" });
+  }
+});
+
 app.post("/api/checkout/initialize", async (req, res) => {
   try {
     const { customer = {}, items } = req.body;
