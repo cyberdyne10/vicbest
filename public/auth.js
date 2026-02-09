@@ -14,26 +14,49 @@ async function logoutUser() {
 }
 
 async function renderAuthNav() {
-  const host = document.getElementById('auth-nav');
-  if (!host) return;
+  const hosts = [
+    document.getElementById('auth-nav'),
+    document.getElementById('auth-nav-mobile'),
+  ].filter(Boolean);
+
+  if (!hosts.length) return;
 
   const user = await getCurrentUser();
+
   if (!user) {
-    host.innerHTML = `
-      <a href="/login" class="hover:text-blue-800">Login</a>
-      <a href="/signup" class="bg-blue-900 text-white px-3 py-1.5 rounded-lg">Sign up</a>
-    `;
+    hosts.forEach((host) => {
+      const isMobile = host.id === 'auth-nav-mobile';
+      host.innerHTML = isMobile
+        ? `
+          <a href="/login" class="block">Login</a>
+          <a href="/signup" class="block bg-blue-900 text-white px-3 py-2 rounded-lg text-center">Sign up</a>
+        `
+        : `
+          <a href="/login" class="hover:text-blue-800">Login</a>
+          <a href="/signup" class="bg-blue-900 text-white px-3 py-1.5 rounded-lg">Sign up</a>
+        `;
+    });
     return;
   }
 
-  host.innerHTML = `
-    <span class="text-gray-700">Hi, <strong>${user.name}</strong></span>
-    <a href="/checkout" class="hover:text-blue-800">My Checkout</a>
-    <button id="logout-user-btn" class="text-red-600">Logout</button>
-  `;
+  hosts.forEach((host) => {
+    const isMobile = host.id === 'auth-nav-mobile';
+    host.innerHTML = isMobile
+      ? `
+        <span class="text-gray-700">Hi, <strong>${user.name}</strong></span>
+        <a href="/checkout" class="block">My Checkout</a>
+        <button class="logout-user-btn text-red-600 text-left">Logout</button>
+      `
+      : `
+        <span class="text-gray-700">Hi, <strong>${user.name}</strong></span>
+        <a href="/checkout" class="hover:text-blue-800">My Checkout</a>
+        <button class="logout-user-btn text-red-600">Logout</button>
+      `;
+  });
 
-  const logoutBtn = document.getElementById('logout-user-btn');
-  if (logoutBtn) logoutBtn.addEventListener('click', logoutUser);
+  document.querySelectorAll('.logout-user-btn').forEach((btn) => {
+    btn.addEventListener('click', logoutUser);
+  });
 }
 
 renderAuthNav();

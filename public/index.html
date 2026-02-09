@@ -20,6 +20,22 @@
           <i class="fas fa-shopping-cart"></i> Cart <span id="cart-count" class="ml-1">0</span>
         </button>
       </div>
+
+      <button id="mobile-menu-btn" class="md:hidden text-2xl text-gray-700" aria-label="Open menu">
+        <i class="fas fa-bars"></i>
+      </button>
+    </div>
+
+    <div id="mobile-menu" class="hidden md:hidden border-t bg-white">
+      <div class="px-4 py-4 space-y-3 text-gray-700 font-medium">
+        <a href="#cars" class="block">Vehicles</a>
+        <a href="#groceries" class="block">Groceries</a>
+        <a href="#contact" class="block">Contact</a>
+        <div id="auth-nav-mobile" class="flex flex-col gap-2 text-sm"></div>
+        <button id="open-cart-btn-mobile" class="w-full bg-orange-500 text-white px-4 py-2 rounded-lg font-semibold text-left">
+          <i class="fas fa-shopping-cart"></i> Cart <span id="cart-count-mobile" class="ml-1">0</span>
+        </button>
+      </div>
     </div>
   </nav>
 

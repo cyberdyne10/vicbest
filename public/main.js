@@ -4,6 +4,7 @@ const CART_KEY = 'vicbest_cart';
 const carsGrid = document.getElementById('cars-grid');
 const groceriesGrid = document.getElementById('groceries-grid');
 const cartCount = document.getElementById('cart-count');
+const cartCountMobile = document.getElementById('cart-count-mobile');
 const cartItems = document.getElementById('cart-items');
 const cartTotal = document.getElementById('cart-total');
 const drawer = document.getElementById('cart-drawer');
@@ -45,16 +46,16 @@ function productCard(p) {
 }
 
 function renderProducts() {
-  carsGrid.innerHTML = products.filter(p => p.category === 'car').map(productCard).join('');
-  groceriesGrid.innerHTML = products.filter(p => p.category === 'grocery').map(productCard).join('');
+  carsGrid.innerHTML = products.filter((p) => p.category === 'car').map(productCard).join('');
+  groceriesGrid.innerHTML = products.filter((p) => p.category === 'grocery').map(productCard).join('');
 
-  document.querySelectorAll('.add-cart').forEach(btn => {
+  document.querySelectorAll('.add-cart').forEach((btn) => {
     btn.addEventListener('click', () => addToCart(Number(btn.dataset.id)));
   });
 }
 
 function addToCart(productId) {
-  const existing = cart.find(i => i.productId === productId);
+  const existing = cart.find((i) => i.productId === productId);
   if (existing) existing.quantity += 1;
   else cart.push({ productId, quantity: 1 });
   saveCart();
@@ -62,7 +63,7 @@ function addToCart(productId) {
 }
 
 function removeItem(productId) {
-  const idx = cart.findIndex(i => i.productId === productId);
+  const idx = cart.findIndex((i) => i.productId === productId);
   if (idx >= 0) cart.splice(idx, 1);
   saveCart();
   renderCart();
@@ -73,50 +74,80 @@ function saveCart() {
   fetch('/api/cart/sync', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, cart })
+    body: JSON.stringify({ sessionId, cart }),
   }).catch(() => {});
 }
 
 function renderCart() {
-  cartCount.textContent = cart.reduce((sum, i) => sum + i.quantity, 0);
+  const count = cart.reduce((sum, i) => sum + i.quantity, 0);
+  if (cartCount) cartCount.textContent = count;
+  if (cartCountMobile) cartCountMobile.textContent = count;
+
   if (cart.length === 0) {
     cartItems.innerHTML = '<p class="text-gray-500">Your cart is empty.</p>';
     cartTotal.textContent = NGN.format(0);
     return;
   }
 
-  const merged = cart.map(item => {
-    const p = products.find(x => x.id === item.productId);
-    if (!p) return null;
-    return { ...item, product: p, line: p.price * item.quantity };
-  }).filter(Boolean);
+  const merged = cart
+    .map((item) => {
+      const p = products.find((x) => x.id === item.productId);
+      if (!p) return null;
+      return { ...item, product: p, line: p.price * item.quantity };
+    })
+    .filter(Boolean);
 
-  cartItems.innerHTML = merged.map(m => `<div class="border rounded-lg p-3">
+  cartItems.innerHTML = merged
+    .map(
+      (m) => `<div class="border rounded-lg p-3">
       <p class="font-semibold">${m.product.name}</p>
       <p class="text-sm text-gray-500">Qty: ${m.quantity}</p>
       <div class="flex justify-between mt-2">
         <span>${NGN.format(m.line)}</span>
         <button data-remove="${m.product.id}" class="text-red-600 text-sm">Remove</button>
       </div>
-    </div>`).join('');
+    </div>`
+    )
+    .join('');
 
   const total = merged.reduce((sum, m) => sum + m.line, 0);
   cartTotal.textContent = NGN.format(total);
 
-  document.querySelectorAll('[data-remove]').forEach(btn => {
+  document.querySelectorAll('[data-remove]').forEach((btn) => {
     btn.addEventListener('click', () => removeItem(Number(btn.dataset.remove)));
   });
 }
 
-document.getElementById('open-cart-btn').addEventListener('click', () => {
+function openDrawer() {
   drawer.classList.remove('translate-x-full');
   overlay.classList.remove('hidden');
-});
-document.getElementById('close-cart-btn').addEventListener('click', closeDrawer);
-overlay.addEventListener('click', closeDrawer);
+}
+
 function closeDrawer() {
   drawer.classList.add('translate-x-full');
   overlay.classList.add('hidden');
+}
+
+document.getElementById('open-cart-btn')?.addEventListener('click', openDrawer);
+document.getElementById('open-cart-btn-mobile')?.addEventListener('click', openDrawer);
+document.getElementById('close-cart-btn')?.addEventListener('click', closeDrawer);
+overlay?.addEventListener('click', closeDrawer);
+
+const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+const mobileMenu = document.getElementById('mobile-menu');
+if (mobileMenuBtn && mobileMenu) {
+  mobileMenuBtn.addEventListener('click', () => {
+    mobileMenu.classList.toggle('hidden');
+    const icon = mobileMenuBtn.querySelector('i');
+    if (icon) {
+      icon.classList.toggle('fa-bars');
+      icon.classList.toggle('fa-times');
+    }
+  });
+
+  mobileMenu.querySelectorAll('a').forEach((a) => {
+    a.addEventListener('click', () => mobileMenu.classList.add('hidden'));
+  });
 }
 
 fetchProducts();
