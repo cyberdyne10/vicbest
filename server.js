@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const express = require("express");
 const path = require("path");
-const { initDb, all, get, run } = require("./db");
+const { initDb, all, get, run, dbPath, getStartupWarnings } = require("./db");
 const { notifyNewOrder, notifyOrderStatusChanged, notifyAdminLowStockSummary } = require("./notifications");
 
 const app = express();
@@ -12,6 +12,7 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
 const VALID_CATEGORIES = new Set(["car", "grocery"]);
 const ORDER_STATUSES = new Set(["pending_payment", "paid", "processing", "delivered", "cancelled"]);
+const ADMIN_ORDER_STATUS_FILTERS = new Set(["new", "processing", "delivered", "cancelled"]);
 const MAX_INPUT_LENGTH = {
   deliveryZoneCode: 80,
   deliveryZoneName: 120,
@@ -343,6 +344,21 @@ function hasInventoryJobAccess(req) {
   if (!secret) return false;
   const supplied = safeText(req.headers["x-job-secret"] || req.query?.key || req.body?.key, 300);
   return supplied && supplied === secret;
+}
+
+function buildAdminOrderFilters(rawStatusFilter, rawSearch) {
+  const statusFilter = rawStatusFilter ? String(rawStatusFilter).trim().toLowerCase() : "";
+  const search = safeText(rawSearch, 120).toLowerCase();
+
+  if (statusFilter && !ADMIN_ORDER_STATUS_FILTERS.has(statusFilter) && !ORDER_STATUSES.has(statusFilter)) {
+    return { error: "Invalid status filter" };
+  }
+
+  let statuses = [];
+  if (statusFilter === "new") statuses = ["pending_payment", "paid"];
+  else if (statusFilter) statuses = [statusFilter];
+
+  return { statuses, search };
 }
 
 app.use(attachUser);
@@ -944,14 +960,33 @@ app.get("/api/orders/:reference", async (req, res) => {
 
 app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   try {
-    const status = req.query.status ? String(req.query.status).trim() : "";
-    if (status && !ORDER_STATUSES.has(status)) {
-      return res.status(400).json({ error: "Invalid status filter" });
+    const { statuses, search, error } = buildAdminOrderFilters(req.query.status, req.query.search);
+    if (error) return res.status(400).json({ error });
+
+    const where = [];
+    const params = [];
+
+    if (statuses.length === 1) {
+      where.push("status = ?");
+      params.push(statuses[0]);
+    } else if (statuses.length > 1) {
+      where.push(`status IN (${statuses.map(() => "?").join(",")})`);
+      params.push(...statuses);
     }
 
-    const orders = status
-      ? await all("SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC", [status])
-      : await all("SELECT * FROM orders ORDER BY created_at DESC");
+    if (search) {
+      where.push(`(
+        LOWER(COALESCE(payment_reference, '')) LIKE ? OR
+        LOWER(COALESCE(customer_name, '')) LIKE ? OR
+        LOWER(COALESCE(customer_email, '')) LIKE ? OR
+        CAST(id AS TEXT) LIKE ?
+      )`);
+      const term = `%${search}%`;
+      params.push(term, term, term, term);
+    }
+
+    const sql = `SELECT * FROM orders ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC`;
+    const orders = await all(sql, params);
 
     const orderIds = orders.map((o) => o.id);
     const items = orderIds.length
@@ -1169,5 +1204,10 @@ app.get("/signup", (_, res) => {
 initDb().then(() => {
   app.listen(PORT, () => {
     console.log(`Vicbest Store running on http://localhost:${PORT}`);
+    console.log(`SQLite DB: ${dbPath}`);
+    getStartupWarnings().forEach((warning) => console.warn(`[startup-check] ${warning}`));
   });
+}).catch((err) => {
+  console.error("Failed to initialize database", err);
+  process.exit(1);
 });

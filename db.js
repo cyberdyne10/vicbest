@@ -11,6 +11,22 @@ if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
 const db = new sqlite3.Database(dbPath);
 
+function isLikelyEphemeralPath(filePath) {
+  const normalized = String(filePath || "").replace(/\\/g, "/").toLowerCase();
+  return normalized.startsWith("/tmp/") || normalized.includes("render/project/src") || normalized.includes("app/.render");
+}
+
+function getStartupWarnings() {
+  const warnings = [];
+  if (!process.env.SQLITE_PATH) {
+    warnings.push("SQLITE_PATH is not set. Using local ./data path; use a persistent disk path in production.");
+  }
+  if (process.env.RENDER && isLikelyEphemeralPath(dbPath)) {
+    warnings.push("Detected Render with a likely ephemeral SQLite path. Set SQLITE_PATH to your mounted persistent disk (e.g. /var/data/vicbest.db).");
+  }
+  return warnings;
+}
+
 function run(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function (err) {
@@ -163,6 +179,13 @@ async function applyMigrations() {
         await run(`CREATE INDEX IF NOT EXISTS idx_notification_logs_created_at ON notification_logs(created_at)`);
       },
     },
+    {
+      name: "20260210_add_orders_admin_query_indexes",
+      up: async () => {
+        await run(`CREATE INDEX IF NOT EXISTS idx_orders_status_created_at ON orders(status, created_at DESC)`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders(payment_reference)`);
+      },
+    },
   ];
 
   for (const migration of migrations) {
@@ -221,6 +244,14 @@ async function seedDeliveryZones() {
 }
 
 async function initDb() {
+  if (fs.existsSync(dbPath)) {
+    fs.accessSync(dbPath, fs.constants.R_OK | fs.constants.W_OK);
+  } else {
+    fs.accessSync(dbDir, fs.constants.W_OK);
+  }
+
+  await run(`PRAGMA journal_mode = WAL`);
+  await run(`PRAGMA busy_timeout = 5000`);
   await run(`CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -323,4 +354,4 @@ async function initDb() {
   await seedDeliveryZones();
 }
 
-module.exports = { db, run, get, all, initDb };
+module.exports = { db, run, get, all, initDb, dbPath, getStartupWarnings };

@@ -1,8 +1,12 @@
 const NGN = new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 });
 const ADMIN_TOKEN_KEY = 'vicbest_admin_token';
 const ORDER_STATUSES = ['pending_payment', 'paid', 'processing', 'delivered', 'cancelled'];
+const ORDER_FILTERS = ['', 'new', 'processing', 'delivered', 'cancelled'];
 let token = localStorage.getItem(ADMIN_TOKEN_KEY) || '';
 let products = [];
+let activeOrderFilter = '';
+let orderSearchTerm = '';
+let orderSearchDebounce = null;
 
 const $ = (id) => document.getElementById(id);
 const authHeaders = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
@@ -135,6 +139,25 @@ async function fetchProducts() {
   });
 }
 
+function statusChip(status) {
+  const map = {
+    pending_payment: 'bg-amber-100 text-amber-800',
+    paid: 'bg-blue-100 text-blue-700',
+    processing: 'bg-indigo-100 text-indigo-700',
+    delivered: 'bg-green-100 text-green-700',
+    cancelled: 'bg-red-100 text-red-700'
+  };
+  return `<span class="px-2 py-1 rounded-full text-xs font-semibold ${map[status] || 'bg-gray-100 text-gray-700'}">${status}</span>`;
+}
+
+function quickActions(o) {
+  const actions = [];
+  if (o.status !== 'processing') actions.push({ next: 'processing', label: 'Mark processing' });
+  if (o.status !== 'delivered') actions.push({ next: 'delivered', label: 'Mark delivered' });
+  if (o.status !== 'cancelled') actions.push({ next: 'cancelled', label: 'Cancel' });
+  return actions.map((a) => `<button data-quick-status="${o.id}" data-next-status="${a.next}" class="px-2 py-1 rounded border text-xs hover:bg-gray-50">${a.label}</button>`).join('');
+}
+
 function orderCard(o) {
   const opts = ORDER_STATUSES.map((s) => `<option value="${s}" ${o.status === s ? 'selected' : ''}>${s}</option>`).join('');
   const items = (o.items || []).map((i) => `<li>${i.quantity} × ${i.product_name}</li>`).join('');
@@ -145,23 +168,52 @@ function orderCard(o) {
   const deliveryFee = hasDeliveryFee ? Number(o.delivery_fee) : 0;
   const grandTotal = hasGrandTotal ? Number(o.grand_total) : Number(o.amount || subtotal + deliveryFee);
   const location = o.delivery_zone_name || o.delivery_zone_code || '-';
-  return `<div class="border rounded-xl p-4"><div class="flex justify-between"><div><p class="font-bold">Order #${o.id} • ${o.payment_reference || 'N/A'}</p><p class="text-sm">${o.customer_name} • ${o.customer_email}</p><p class="text-xs text-gray-600">Location: ${location}</p><p class="text-xs text-gray-600">Subtotal: ${NGN.format(subtotal)} • Delivery: ${NGN.format(deliveryFee)}</p></div><div><p class="font-semibold">${NGN.format(grandTotal)}</p><select data-order-status="${o.id}" class="border rounded">${opts}</select></div></div><ul class="text-sm mt-2 list-disc pl-5">${items || '<li>No items</li>'}</ul></div>`;
+  return `<div class="border rounded-xl p-4"><div class="flex flex-col sm:flex-row justify-between gap-3"><div><p class="font-bold">Order #${o.id} • ${o.payment_reference || 'N/A'}</p><p class="text-sm">${o.customer_name} • ${o.customer_email}</p><p class="text-xs text-gray-600">Location: ${location}</p><p class="text-xs text-gray-600">Subtotal: ${NGN.format(subtotal)} • Delivery: ${NGN.format(deliveryFee)}</p></div><div class="sm:text-right space-y-2"><p class="font-semibold">${NGN.format(grandTotal)}</p>${statusChip(o.status)}<div><select data-order-status="${o.id}" class="border rounded px-2 py-1 text-sm mt-1">${opts}</select></div></div></div><div class="mt-3 flex flex-wrap gap-2">${quickActions(o)}</div><ul class="text-sm mt-2 list-disc pl-5">${items || '<li>No items</li>'}</ul></div>`;
+}
+
+async function updateOrderStatus(orderId, status) {
+  const r = await fetch(`/api/admin/orders/${orderId}/status`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ status }) });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Failed to update order');
+}
+
+function syncOrderFilterButtons() {
+  document.querySelectorAll('.order-filter-btn').forEach((btn) => {
+    const active = btn.dataset.filter === activeOrderFilter;
+    btn.classList.toggle('bg-blue-900', active);
+    btn.classList.toggle('text-white', active);
+  });
 }
 
 async function fetchOrders() {
-  const f = $('order-filter').value;
-  const r = await fetch(`/api/admin/orders${f ? `?status=${encodeURIComponent(f)}` : ''}`, { headers: authHeaders() });
+  const params = new URLSearchParams();
+  if (activeOrderFilter) params.set('status', activeOrderFilter);
+  if (orderSearchTerm.trim()) params.set('search', orderSearchTerm.trim());
+  const query = params.toString();
+  const r = await fetch(`/api/admin/orders${query ? `?${query}` : ''}`, { headers: authHeaders() });
   const d = await r.json();
   if (!r.ok) throw new Error(d.error || 'Orders failed');
-  $('orders-wrap').innerHTML = (d.data || []).map(orderCard).join('') || '<p class="text-gray-500">No orders yet.</p>';
+  $('orders-wrap').innerHTML = (d.data || []).map(orderCard).join('') || '<p class="text-gray-500">No orders found.</p>';
   document.querySelectorAll('[data-order-status]').forEach((s) => s.onchange = async () => {
-    await fetch(`/api/admin/orders/${s.dataset.orderStatus}/status`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ status: s.value }) });
-    await Promise.all([fetchMetrics(), fetchNotificationLogs()]);
+    await updateOrderStatus(s.dataset.orderStatus, s.value);
+    await Promise.all([fetchOrders(), fetchMetrics(), fetchNotificationLogs()]);
+  });
+  document.querySelectorAll('[data-quick-status]').forEach((btn) => btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await updateOrderStatus(btn.dataset.quickStatus, btn.dataset.nextStatus);
+      await Promise.all([fetchOrders(), fetchMetrics(), fetchNotificationLogs()]);
+    } catch (err) {
+      alert(err.message);
+    }
   });
 }
 
 async function bootstrap() {
   setAuthState(true);
+  activeOrderFilter = ORDER_FILTERS.includes($('order-filter').value) ? $('order-filter').value : '';
+  $('order-filter').value = activeOrderFilter;
+  syncOrderFilterButtons();
   await Promise.all([fetchMetrics(), fetchLowStock(), fetchProducts(), fetchOrders(), fetchNotificationLogs(), fetchLowStockSummary()]);
   $('export-csv').onclick = (e) => {
     e.preventDefault();
@@ -211,7 +263,26 @@ $('product-form').onsubmit = async (e) => {
 };
 
 $('reset-product').onclick = resetForm;
-$('order-filter').onchange = fetchOrders;
+$('order-filter').onchange = async (e) => {
+  activeOrderFilter = ORDER_FILTERS.includes(e.target.value) ? e.target.value : '';
+  syncOrderFilterButtons();
+  await fetchOrders();
+};
+$('order-search').oninput = () => {
+  orderSearchTerm = $('order-search').value || '';
+  clearTimeout(orderSearchDebounce);
+  orderSearchDebounce = setTimeout(() => {
+    fetchOrders().catch((err) => {
+      $('orders-wrap').innerHTML = `<p class="text-red-600 text-sm">${err.message}</p>`;
+    });
+  }, 250);
+};
+document.querySelectorAll('.order-filter-btn').forEach((btn) => btn.onclick = async () => {
+  activeOrderFilter = btn.dataset.filter || '';
+  $('order-filter').value = activeOrderFilter;
+  syncOrderFilterButtons();
+  await fetchOrders();
+});
 $('logout-btn').onclick = () => {
   token = '';
   localStorage.removeItem(ADMIN_TOKEN_KEY);

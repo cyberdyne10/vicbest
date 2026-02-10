@@ -85,13 +85,23 @@
       </div>
 
       <div class="bg-white border rounded-2xl p-5">
-        <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h3 class="text-lg font-bold">Orders</h3>
-          <div class="flex gap-2">
-            <a href="/api/admin/orders/export.csv" target="_blank" id="export-csv" class="px-3 py-2 rounded bg-green-600 text-white text-sm">Export CSV</a>
+          <a href="/api/admin/orders/export.csv" target="_blank" id="export-csv" class="px-3 py-2 rounded bg-green-600 text-white text-sm">Export CSV</a>
+        </div>
+        <div class="space-y-3 mb-4">
+          <div class="grid sm:grid-cols-2 gap-2">
+            <input id="order-search" type="search" placeholder="Search order #, ref, customer name/email" class="border rounded-lg px-3 py-2 text-sm w-full" />
             <select id="order-filter" class="border rounded-lg px-3 py-2 text-sm">
-              <option value="">All statuses</option><option value="pending_payment">pending_payment</option><option value="paid">paid</option><option value="processing">processing</option><option value="delivered">delivered</option><option value="cancelled">cancelled</option>
+              <option value="">All statuses</option><option value="new">new</option><option value="processing">processing</option><option value="delivered">delivered</option><option value="cancelled">cancelled</option>
             </select>
+          </div>
+          <div id="order-filter-buttons" class="flex flex-wrap gap-2 text-sm">
+            <button data-filter="" class="order-filter-btn px-3 py-1.5 rounded-full border bg-blue-900 text-white">All</button>
+            <button data-filter="new" class="order-filter-btn px-3 py-1.5 rounded-full border">New</button>
+            <button data-filter="processing" class="order-filter-btn px-3 py-1.5 rounded-full border">Processing</button>
+            <button data-filter="delivered" class="order-filter-btn px-3 py-1.5 rounded-full border">Delivered</button>
+            <button data-filter="cancelled" class="order-filter-btn px-3 py-1.5 rounded-full border">Cancelled</button>
           </div>
         </div>
         <div id="orders-wrap" class="space-y-4"></div>
