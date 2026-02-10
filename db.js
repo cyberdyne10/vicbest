@@ -104,6 +104,37 @@ async function applyMigrations() {
         }
       },
     },
+    {
+      name: "20260210_add_delivery_zone_and_order_fee_columns",
+      up: async () => {
+        await run(`CREATE TABLE IF NOT EXISTS delivery_zones (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          code TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          flat_fee INTEGER NOT NULL DEFAULT 0,
+          is_covered INTEGER NOT NULL DEFAULT 1,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        if (!(await columnExists("orders", "delivery_zone_code"))) {
+          await run(`ALTER TABLE orders ADD COLUMN delivery_zone_code TEXT`);
+        }
+        if (!(await columnExists("orders", "delivery_zone_name"))) {
+          await run(`ALTER TABLE orders ADD COLUMN delivery_zone_name TEXT`);
+        }
+        if (!(await columnExists("orders", "subtotal_amount"))) {
+          await run(`ALTER TABLE orders ADD COLUMN subtotal_amount INTEGER`);
+        }
+        if (!(await columnExists("orders", "delivery_fee"))) {
+          await run(`ALTER TABLE orders ADD COLUMN delivery_fee INTEGER`);
+        }
+        if (!(await columnExists("orders", "grand_total"))) {
+          await run(`ALTER TABLE orders ADD COLUMN grand_total INTEGER`);
+        }
+      },
+    },
   ];
 
   for (const migration of migrations) {
@@ -134,6 +165,29 @@ async function seedProducts() {
       `INSERT INTO products (name, category, price, description, image_url, metadata, in_stock, stock_quantity)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       p
+    );
+  }
+}
+
+async function seedDeliveryZones() {
+  const zones = [
+    ["lagos_mainland", "Lagos Mainland", 3000, 1, 1],
+    ["lagos_island", "Lagos Island", 5000, 1, 1],
+    ["abuja", "Abuja", 7000, 1, 1],
+    ["outside_coverage", "Outside Coverage", 0, 0, 1],
+  ];
+
+  for (const zone of zones) {
+    await run(
+      `INSERT INTO delivery_zones (code, name, flat_fee, is_covered, is_active, updated_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(code) DO UPDATE SET
+         name = excluded.name,
+         flat_fee = excluded.flat_fee,
+         is_covered = excluded.is_covered,
+         is_active = excluded.is_active,
+         updated_at = CURRENT_TIMESTAMP`,
+      zone
     );
   }
 }
@@ -178,6 +232,11 @@ async function initDb() {
     processing_at DATETIME,
     delivered_at DATETIME,
     cancelled_at DATETIME,
+    delivery_zone_code TEXT,
+    delivery_zone_name TEXT,
+    subtotal_amount INTEGER,
+    delivery_fee INTEGER,
+    grand_total INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
@@ -203,11 +262,23 @@ async function initDb() {
     UNIQUE(session_id)
   )`);
 
+  await run(`CREATE TABLE IF NOT EXISTS delivery_zones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    flat_fee INTEGER NOT NULL DEFAULT 0,
+    is_covered INTEGER NOT NULL DEFAULT 1,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
   await applyMigrations();
   if (await columnExists("orders", "user_id")) {
     await run(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)`);
   }
   await seedProducts();
+  await seedDeliveryZones();
 }
 
 module.exports = { db, run, get, all, initDb };

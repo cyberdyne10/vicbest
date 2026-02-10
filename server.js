@@ -12,6 +12,8 @@ const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const VALID_CATEGORIES = new Set(["car", "grocery"]);
 const ORDER_STATUSES = new Set(["pending_payment", "paid", "processing", "delivered", "cancelled"]);
 const MAX_INPUT_LENGTH = {
+  deliveryZoneCode: 80,
+  deliveryZoneName: 120,
   name: 120,
   email: 160,
   password: 200,
@@ -56,6 +58,78 @@ function normalizeEmail(email = "") {
 
 function safeText(value, max = 255) {
   return String(value || "").trim().slice(0, max);
+}
+
+function parseCartItems(items, productMap) {
+  let subtotalAmount = 0;
+  const normalizedItems = [];
+
+  for (const item of items) {
+    const product = productMap.get(Number(item.productId));
+    const quantity = Number(item.quantity) || 1;
+    if (!product || quantity <= 0) continue;
+    const lineTotal = product.price * quantity;
+    subtotalAmount += lineTotal;
+    normalizedItems.push({
+      productId: product.id,
+      productName: product.name,
+      quantity,
+      unitPrice: product.price,
+      lineTotal,
+    });
+  }
+
+  return { subtotalAmount, normalizedItems };
+}
+
+async function calculateDelivery({ deliveryZoneCode, cartSubtotal }) {
+  const code = safeText(deliveryZoneCode, MAX_INPUT_LENGTH.deliveryZoneCode).toLowerCase();
+  const subtotal = Number(cartSubtotal);
+
+  if (!code) return { error: "deliveryZoneCode is required", status: 400 };
+  if (!Number.isInteger(subtotal) || subtotal < 0) {
+    return { error: "cartSubtotal must be a non-negative integer", status: 400 };
+  }
+
+  const zone = await get(
+    "SELECT code, name, flat_fee, is_covered, is_active FROM delivery_zones WHERE code = ?",
+    [code]
+  );
+
+  if (!zone || Number(zone.is_active) !== 1) {
+    return { error: "Invalid delivery location", status: 400 };
+  }
+
+  if (Number(zone.is_covered) !== 1) {
+    return {
+      error: "Selected delivery location is currently outside coverage",
+      status: 400,
+      zone,
+      deliveryFee: 0,
+      grandTotal: subtotal,
+      subtotal,
+    };
+  }
+
+  const deliveryFee = Number(zone.flat_fee) || 0;
+  return {
+    status: 200,
+    zone,
+    deliveryFee,
+    subtotal,
+    grandTotal: subtotal + deliveryFee,
+  };
+}
+
+function getOrderFinancials(order = {}) {
+  const hasSubtotal = order.subtotal_amount !== null && order.subtotal_amount !== undefined && order.subtotal_amount !== "";
+  const hasDeliveryFee = order.delivery_fee !== null && order.delivery_fee !== undefined && order.delivery_fee !== "";
+  const hasGrandTotal = order.grand_total !== null && order.grand_total !== undefined && order.grand_total !== "";
+
+  const subtotal = hasSubtotal ? Number(order.subtotal_amount) : Number(order.amount || 0);
+  const deliveryFee = hasDeliveryFee ? Number(order.delivery_fee) : 0;
+  const grandTotal = hasGrandTotal ? Number(order.grand_total) : Number(order.amount || subtotal + deliveryFee);
+  return { subtotal, deliveryFee, grandTotal };
 }
 
 function getClientIp(req) {
@@ -218,6 +292,55 @@ function toProductPayload(body = {}) {
 app.use(attachUser);
 
 app.get("/api/health", (_, res) => res.json({ ok: true }));
+
+app.get("/api/delivery/zones", async (_, res) => {
+  try {
+    const zones = await all(
+      "SELECT code, name, flat_fee, is_covered FROM delivery_zones WHERE is_active = 1 ORDER BY id ASC"
+    );
+    res.json({ data: zones });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch delivery zones" });
+  }
+});
+
+app.post("/api/delivery/calculate", async (req, res) => {
+  try {
+    const result = await calculateDelivery({
+      deliveryZoneCode: req.body?.deliveryZoneCode,
+      cartSubtotal: req.body?.cartSubtotal,
+    });
+
+    if (result.status !== 200) {
+      return res.status(result.status).json({
+        error: result.error,
+        data: result.zone
+          ? {
+              deliveryZoneCode: result.zone.code,
+              deliveryZoneName: result.zone.name,
+              isCovered: Number(result.zone.is_covered) === 1,
+              subtotal: result.subtotal,
+              deliveryFee: result.deliveryFee,
+              grandTotal: result.grandTotal,
+            }
+          : undefined,
+      });
+    }
+
+    return res.json({
+      data: {
+        deliveryZoneCode: result.zone.code,
+        deliveryZoneName: result.zone.name,
+        isCovered: Number(result.zone.is_covered) === 1,
+        subtotal: result.subtotal,
+        deliveryFee: result.deliveryFee,
+        grandTotal: result.grandTotal,
+      },
+    });
+  } catch {
+    return res.status(500).json({ error: "Failed to calculate delivery" });
+  }
+});
 
 app.post("/api/auth/register", rateLimit({ windowMs: 60_000, maxRequests: 8 }), async (req, res) => {
   try {
@@ -494,27 +617,14 @@ app.post("/api/orders/whatsapp", async (req, res) => {
     );
     const productMap = new Map(products.map((p) => [p.id, p]));
 
-    let amount = 0;
-    const normalizedItems = [];
+    const { subtotalAmount, normalizedItems } = parseCartItems(items, productMap);
+    if (normalizedItems.length === 0) return res.status(400).json({ error: "No valid cart items" });
 
-    for (const item of items) {
-      const product = productMap.get(Number(item.productId));
-      const quantity = Number(item.quantity) || 1;
-      if (!product || quantity <= 0) continue;
-      const lineTotal = product.price * quantity;
-      amount += lineTotal;
-      normalizedItems.push({
-        productId: product.id,
-        productName: product.name,
-        quantity,
-        unitPrice: product.price,
-        lineTotal,
-      });
-    }
-
-    if (normalizedItems.length === 0) {
-      return res.status(400).json({ error: "No valid cart items" });
-    }
+    const delivery = await calculateDelivery({
+      deliveryZoneCode: customer.deliveryZoneCode,
+      cartSubtotal: subtotalAmount,
+    });
+    if (delivery.status !== 200) return res.status(delivery.status).json({ error: delivery.error });
 
     const reference = genRef();
     const customerName = safeText(customer.name || req.user?.name || "", MAX_INPUT_LENGTH.name);
@@ -524,8 +634,8 @@ app.post("/api/orders/whatsapp", async (req, res) => {
     const customerNotes = safeText(customer.notes, MAX_INPUT_LENGTH.notes);
 
     const orderResult = await run(
-      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', ?)`,
+      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference, delivery_zone_code, delivery_zone_name, subtotal_amount, delivery_fee, grand_total)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?)`,
       [
         req.user?.id || null,
         customerName,
@@ -533,8 +643,13 @@ app.post("/api/orders/whatsapp", async (req, res) => {
         customerPhone,
         shippingAddress,
         customerNotes,
-        amount,
+        delivery.grandTotal,
         reference,
+        delivery.zone.code,
+        delivery.zone.name,
+        delivery.subtotal,
+        delivery.deliveryFee,
+        delivery.grandTotal,
       ]
     );
 
@@ -550,7 +665,12 @@ app.post("/api/orders/whatsapp", async (req, res) => {
       data: {
         orderId: orderResult.id,
         reference,
-        amount,
+        amount: delivery.grandTotal,
+        subtotalAmount: delivery.subtotal,
+        deliveryFee: delivery.deliveryFee,
+        grandTotal: delivery.grandTotal,
+        deliveryZoneCode: delivery.zone.code,
+        deliveryZoneName: delivery.zone.name,
         items: normalizedItems,
       },
     });
@@ -578,27 +698,14 @@ app.post("/api/checkout/initialize", async (req, res) => {
     );
     const productMap = new Map(products.map((p) => [p.id, p]));
 
-    let amount = 0;
-    const normalizedItems = [];
+    const { subtotalAmount, normalizedItems } = parseCartItems(items, productMap);
+    if (normalizedItems.length === 0) return res.status(400).json({ error: "No valid cart items" });
 
-    for (const item of items) {
-      const product = productMap.get(Number(item.productId));
-      const quantity = Number(item.quantity) || 1;
-      if (!product || quantity <= 0) continue;
-      const lineTotal = product.price * quantity;
-      amount += lineTotal;
-      normalizedItems.push({
-        productId: product.id,
-        productName: product.name,
-        quantity,
-        unitPrice: product.price,
-        lineTotal,
-      });
-    }
-
-    if (normalizedItems.length === 0) {
-      return res.status(400).json({ error: "No valid cart items" });
-    }
+    const delivery = await calculateDelivery({
+      deliveryZoneCode: customer.deliveryZoneCode,
+      cartSubtotal: subtotalAmount,
+    });
+    if (delivery.status !== 200) return res.status(delivery.status).json({ error: delivery.error });
 
     const reference = genRef();
     const customerName = safeText(customer.name || req.user?.name || "", MAX_INPUT_LENGTH.name);
@@ -608,8 +715,8 @@ app.post("/api/checkout/initialize", async (req, res) => {
     const customerNotes = safeText(customer.notes, MAX_INPUT_LENGTH.notes);
 
     const orderResult = await run(
-      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?)`,
+      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference, delivery_zone_code, delivery_zone_name, subtotal_amount, delivery_fee, grand_total)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?)`,
       [
         req.user?.id || null,
         customerName,
@@ -617,8 +724,13 @@ app.post("/api/checkout/initialize", async (req, res) => {
         customerPhone,
         shippingAddress,
         customerNotes,
-        amount,
+        delivery.grandTotal,
         reference,
+        delivery.zone.code,
+        delivery.zone.name,
+        delivery.subtotal,
+        delivery.deliveryFee,
+        delivery.grandTotal,
       ]
     );
 
@@ -642,13 +754,17 @@ app.post("/api/checkout/initialize", async (req, res) => {
       },
       body: JSON.stringify({
         email: customerEmail,
-        amount: amount * 100,
+        amount: delivery.grandTotal * 100,
         reference,
         callback_url: `${BASE_URL}/checkout/success?reference=${reference}`,
         metadata: {
           orderId: orderResult.id,
           userId: req.user?.id || null,
           customerName,
+          deliveryZoneCode: delivery.zone.code,
+          deliveryFee: delivery.deliveryFee,
+          subtotalAmount: delivery.subtotal,
+          grandTotal: delivery.grandTotal,
         },
       }),
     });
@@ -668,7 +784,10 @@ app.post("/api/checkout/initialize", async (req, res) => {
       data: {
         orderId: orderResult.id,
         reference,
-        amount,
+        amount: delivery.grandTotal,
+        subtotalAmount: delivery.subtotal,
+        deliveryFee: delivery.deliveryFee,
+        grandTotal: delivery.grandTotal,
         authorization_url: data.data.authorization_url,
       },
     });
@@ -853,13 +972,28 @@ app.get("/api/admin/orders/export.csv", requireAdmin, async (_, res) => {
       "customer_name",
       "customer_email",
       "customer_phone",
+      "delivery_zone_name",
+      "subtotal_amount",
+      "delivery_fee",
+      "grand_total",
       "amount",
       "currency",
       "created_at",
     ];
     const escape = (value = "") => `"${String(value).replaceAll('"', '""')}"`;
     const csv = [headers.join(",")]
-      .concat(rows.map((row) => headers.map((h) => escape(row[h] ?? "")).join(",")))
+      .concat(
+        rows.map((row) => {
+          const money = getOrderFinancials(row);
+          const record = {
+            ...row,
+            subtotal_amount: money.subtotal,
+            delivery_fee: money.deliveryFee,
+            grand_total: money.grandTotal,
+          };
+          return headers.map((h) => escape(record[h] ?? "")).join(",");
+        })
+      )
       .join("\n");
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
