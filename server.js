@@ -4,6 +4,7 @@ const bcrypt = require("bcrypt");
 const express = require("express");
 const path = require("path");
 const { initDb, all, get, run } = require("./db");
+const { notifyNewOrder, notifyOrderStatusChanged } = require("./notifications");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -130,6 +131,13 @@ function getOrderFinancials(order = {}) {
   const deliveryFee = hasDeliveryFee ? Number(order.delivery_fee) : 0;
   const grandTotal = hasGrandTotal ? Number(order.grand_total) : Number(order.amount || subtotal + deliveryFee);
   return { subtotal, deliveryFee, grandTotal };
+}
+
+async function fetchOrderWithItems(orderId) {
+  const order = await get("SELECT * FROM orders WHERE id = ?", [orderId]);
+  if (!order) return null;
+  const items = await all("SELECT * FROM order_items WHERE order_id = ? ORDER BY id ASC", [orderId]);
+  return { order, items };
 }
 
 function getClientIp(req) {
@@ -661,6 +669,11 @@ app.post("/api/orders/whatsapp", async (req, res) => {
       );
     }
 
+    const createdOrderBundle = await fetchOrderWithItems(orderResult.id);
+    const notificationResult = createdOrderBundle
+      ? await notifyNewOrder(createdOrderBundle.order, createdOrderBundle.items)
+      : { delivered: false, fallback: null };
+
     res.status(201).json({
       data: {
         orderId: orderResult.id,
@@ -672,6 +685,10 @@ app.post("/api/orders/whatsapp", async (req, res) => {
         deliveryZoneCode: delivery.zone.code,
         deliveryZoneName: delivery.zone.name,
         items: normalizedItems,
+        customerNotification: {
+          channel: notificationResult.delivered ? "email" : "whatsapp_link",
+          fallback: notificationResult.fallback,
+        },
       },
     });
   } catch {
@@ -742,6 +759,11 @@ app.post("/api/checkout/initialize", async (req, res) => {
       );
     }
 
+    const createdOrderBundle = await fetchOrderWithItems(orderResult.id);
+    const notificationResult = createdOrderBundle
+      ? await notifyNewOrder(createdOrderBundle.order, createdOrderBundle.items)
+      : { delivered: false, fallback: null };
+
     if (!process.env.PAYSTACK_SECRET_KEY) {
       return res.status(500).json({ error: "PAYSTACK_SECRET_KEY missing" });
     }
@@ -789,6 +811,10 @@ app.post("/api/checkout/initialize", async (req, res) => {
         deliveryFee: delivery.deliveryFee,
         grandTotal: delivery.grandTotal,
         authorization_url: data.data.authorization_url,
+        customerNotification: {
+          channel: notificationResult.delivered ? "email" : "whatsapp_link",
+          fallback: notificationResult.fallback,
+        },
       },
     });
   } catch {
@@ -921,9 +947,30 @@ app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
 
     const updated = await get("SELECT * FROM orders WHERE id = ?", [orderId]);
     const items = await all("SELECT * FROM order_items WHERE order_id = ?", [orderId]);
+    await notifyOrderStatusChanged(updated, existing.status, status);
     res.json({ data: { ...updated, items } });
   } catch {
     res.status(500).json({ error: "Failed to update order status" });
+  }
+});
+
+app.get("/api/admin/notifications/logs", requireAdmin, async (req, res) => {
+  try {
+    const requestedLimit = Number(req.query.limit || 50);
+    const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 50;
+
+    const logs = await all(
+      `SELECT nl.*, o.payment_reference
+       FROM notification_logs nl
+       LEFT JOIN orders o ON o.id = nl.order_id
+       ORDER BY nl.created_at DESC, nl.id DESC
+       LIMIT ?`,
+      [limit]
+    );
+
+    res.json({ data: logs });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch notification logs" });
   }
 });
 

@@ -135,6 +135,25 @@ async function applyMigrations() {
         }
       },
     },
+    {
+      name: "20260210_add_notification_logs",
+      up: async () => {
+        await run(`CREATE TABLE IF NOT EXISTS notification_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          order_id INTEGER,
+          event_type TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          recipient TEXT,
+          status TEXT NOT NULL,
+          error_message TEXT,
+          payload TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(order_id) REFERENCES orders(id)
+        )`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_notification_logs_order_id ON notification_logs(order_id)`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_notification_logs_created_at ON notification_logs(created_at)`);
+      },
+    },
   ];
 
   for (const migration of migrations) {
@@ -271,6 +290,19 @@ async function initDb() {
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS notification_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER,
+    event_type TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    recipient TEXT,
+    status TEXT NOT NULL,
+    error_message TEXT,
+    payload TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(order_id) REFERENCES orders(id)
   )`);
 
   await applyMigrations();
