@@ -4,6 +4,7 @@ const STORE_WHATSAPP_NUMBER = '2348091747685';
 const summaryItems = document.getElementById('summary-items');
 const summarySubtotal = document.getElementById('summary-subtotal');
 const summaryDelivery = document.getElementById('summary-delivery');
+const summaryDiscount = document.getElementById('summary-discount');
 const summaryTotal = document.getElementById('summary-total');
 const form = document.getElementById('checkout-form'); const errorBox = document.getElementById('error');
 const submitBtn = document.getElementById('submit-btn');
@@ -16,16 +17,31 @@ function cartSubtotal() { return getMergedCart().reduce((s, m) => s + m.line, 0)
 async function refreshDeliveryQuote() {
   const subtotal = cartSubtotal();
   const deliveryZoneCode = `${locationSelect.value || ''}`.trim();
+  const couponCode = `${form.elements.couponCode?.value || ''}`.trim();
   deliveryQuote = null;
+  let discountAmount = 0;
+  if (couponCode) {
+    const couponRes = await fetch('/api/coupons/validate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: couponCode, subtotalAmount: subtotal, customerEmail: `${form.elements.email?.value || ''}`.trim() })
+    });
+    const couponData = await couponRes.json();
+    if (!couponRes.ok) throw new Error(couponData.error || 'Invalid coupon');
+    discountAmount = Number(couponData?.data?.discountAmount || 0);
+  }
+
+  const discountedSubtotal = Math.max(0, subtotal - discountAmount);
+  summaryDiscount.textContent = NGN.format(discountAmount);
+
   if (!deliveryZoneCode) {
     summaryDelivery.textContent = 'Select location';
-    summaryTotal.textContent = NGN.format(subtotal);
+    summaryTotal.textContent = NGN.format(discountedSubtotal);
     return;
   }
 
   const res = await fetch('/api/delivery/calculate', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deliveryZoneCode, cartSubtotal: subtotal })
+    body: JSON.stringify({ deliveryZoneCode, cartSubtotal: discountedSubtotal })
   });
   const data = await res.json();
   if (!res.ok) {
@@ -44,6 +60,7 @@ async function renderSummary() {
   const subtotal = merged.reduce((s, m) => s + m.line, 0);
   summaryItems.innerHTML = merged.length ? merged.map((m) => `<div class="flex justify-between"><span>${m.name} × ${m.quantity}</span><span>${NGN.format(m.line)}</span></div>`).join('') : '<p class="text-gray-500">Your cart is empty.</p>';
   summarySubtotal.textContent = NGN.format(subtotal);
+  if (summaryDiscount) summaryDiscount.textContent = NGN.format(0);
   try { await refreshDeliveryQuote(); } catch (_) {}
 }
 
@@ -71,7 +88,7 @@ locationSelect.addEventListener('change', async () => {
 form.addEventListener('submit', async (e) => {
   e.preventDefault(); errorBox.textContent = ''; if (!cart.length) return (errorBox.textContent = 'Cart is empty.');
   const fd = new FormData(form); const method = fd.get('checkoutMethod');
-  const customer = { name: `${fd.get('name') || ''}`.trim(), email: `${fd.get('email') || ''}`.trim(), phone: `${fd.get('phone') || ''}`.trim(), address: `${fd.get('address') || ''}`.trim(), notes: `${fd.get('notes') || ''}`.trim(), deliveryZoneCode: `${fd.get('deliveryZoneCode') || ''}`.trim() };
+  const customer = { name: `${fd.get('name') || ''}`.trim(), email: `${fd.get('email') || ''}`.trim(), phone: `${fd.get('phone') || ''}`.trim(), address: `${fd.get('address') || ''}`.trim(), notes: `${fd.get('notes') || ''}`.trim(), deliveryZoneCode: `${fd.get('deliveryZoneCode') || ''}`.trim(), couponCode: `${fd.get('couponCode') || ''}`.trim() };
   if (!customer.name || !customer.email) return (errorBox.textContent = 'Please provide your name and email.');
   if (!customer.deliveryZoneCode) return (errorBox.textContent = 'Please select a delivery location.');
 
@@ -102,7 +119,7 @@ form.addEventListener('submit', async (e) => {
     }
 
     const order = data.data;
-    const lines = ['Hello Vicbest Store, I want to complete this order:', `Order Ref: ${order.reference}`, '', ...order.items.map((m, i) => `${i + 1}. ${m.productName} x ${m.quantity} - ${NGN.format(m.lineTotal)}`), '', `Subtotal: ${NGN.format(Number(order.subtotalAmount || 0))}`, `Delivery (${order.deliveryZoneName || customer.deliveryZoneCode}): ${NGN.format(Number(order.deliveryFee || 0))}`, `Grand Total: ${NGN.format(Number(order.grandTotal || order.amount || 0))}`, '', `Name: ${customer.name}`, `Email: ${customer.email}`, `Phone: ${customer.phone || '-'}`, `Address: ${customer.address || '-'}`, `Location: ${order.deliveryZoneName || customer.deliveryZoneCode}`, `Notes: ${customer.notes || '-'}`];
+    const lines = ['Hello Vicbest Store, I want to complete this order:', `Order Ref: ${order.reference}`, '', ...order.items.map((m, i) => `${i + 1}. ${m.productName} x ${m.quantity} - ${NGN.format(m.lineTotal)}`), '', `Subtotal: ${NGN.format(Number(order.subtotalAmount || 0))}`, `Discount: ${NGN.format(Number(order.discountAmount || 0))}`, `Delivery (${order.deliveryZoneName || customer.deliveryZoneCode}): ${NGN.format(Number(order.deliveryFee || 0))}`, `Grand Total: ${NGN.format(Number(order.grandTotal || order.amount || 0))}`, '', `Track: ${order.trackingUrl || `${window.location.origin}/track/${order.reference}`}`, '', `Name: ${customer.name}`, `Email: ${customer.email}`, `Phone: ${customer.phone || '-'}`, `Address: ${customer.address || '-'}`, `Location: ${order.deliveryZoneName || customer.deliveryZoneCode}`, `Notes: ${customer.notes || '-'}`];
     localStorage.removeItem(CART_KEY);
     window.location.href = `https://wa.me/${STORE_WHATSAPP_NUMBER}?text=${encodeURIComponent(lines.join('\n'))}`;
   } catch (err) {

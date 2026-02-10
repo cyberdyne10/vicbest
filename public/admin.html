@@ -31,7 +31,7 @@
       <div id="metrics-grid" class="grid grid-cols-2 md:grid-cols-5 gap-3"></div>
 
       <div class="grid lg:grid-cols-3 gap-6">
-        <div class="bg-white border rounded-2xl p-5">
+        <div class="bg-white border rounded-2xl p-5 space-y-6">
           <h3 class="text-lg font-bold mb-4">Product Form</h3>
           <form id="product-form" class="space-y-3">
             <input type="hidden" id="product-id" />
@@ -87,6 +87,30 @@
             </div>
           </form>
           <p id="product-form-msg" class="text-sm mt-3"></p>
+
+          <div class="border-t pt-4">
+            <h4 class="font-bold text-sm">Bulk Upload (CSV)</h4>
+            <p class="text-xs text-gray-500 mb-2">Columns: id(optional), name, category(car/grocery), price, description, image_url, stock_quantity, low_stock_threshold, in_stock, metadata.</p>
+            <textarea id="csv-input" rows="6" class="w-full border rounded-lg px-3 py-2 text-xs font-mono" placeholder="name,category,price"></textarea>
+            <button id="run-csv-upload" class="mt-2 w-full bg-indigo-700 text-white py-2 rounded-lg text-sm">Upload CSV</button>
+            <p id="csv-upload-msg" class="text-xs mt-2"></p>
+            <div id="csv-upload-report" class="text-xs max-h-48 overflow-auto mt-2"></div>
+          </div>
+
+          <div class="border-t pt-4">
+            <h4 class="font-bold text-sm">Coupons</h4>
+            <form id="coupon-form" class="space-y-2 mt-2">
+              <input id="coupon-code" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Code e.g SAVE10" required />
+              <div class="grid grid-cols-2 gap-2">
+                <select id="coupon-type" class="border rounded-lg px-3 py-2 text-sm"><option value="percent">Percent %</option><option value="fixed">Fixed amount</option></select>
+                <input id="coupon-value" type="number" min="1" class="border rounded-lg px-3 py-2 text-sm" placeholder="Value" required />
+              </div>
+              <input id="coupon-min" type="number" min="0" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Minimum order amount (optional)" />
+              <input id="coupon-limit" type="number" min="0" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Usage limit (optional)" />
+              <button class="w-full bg-emerald-700 text-white py-2 rounded-lg text-sm">Save Coupon</button>
+            </form>
+            <div id="coupons-wrap" class="space-y-2 mt-3 text-xs"></div>
+          </div>
         </div>
 
         <div class="lg:col-span-2 bg-white border rounded-2xl p-5 overflow-x-auto">

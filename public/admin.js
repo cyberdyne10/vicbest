@@ -189,14 +189,17 @@ function quickActions(o) {
 function orderCard(o) {
   const opts = ORDER_STATUSES.map((s) => `<option value="${s}" ${o.status === s ? 'selected' : ''}>${s}</option>`).join('');
   const items = (o.items || []).map((i) => `<li>${i.quantity} × ${i.product_name}</li>`).join('');
+  const timeline = (o.timeline || []).slice(0, 5).map((t) => `<li>${t.created_at || ''} • ${t.message || t.event_type}</li>`).join('');
   const hasSubtotal = o.subtotal_amount !== null && o.subtotal_amount !== undefined && o.subtotal_amount !== '';
   const hasDeliveryFee = o.delivery_fee !== null && o.delivery_fee !== undefined && o.delivery_fee !== '';
+  const hasDiscount = o.discount_amount !== null && o.discount_amount !== undefined && o.discount_amount !== '';
   const hasGrandTotal = o.grand_total !== null && o.grand_total !== undefined && o.grand_total !== '';
   const subtotal = hasSubtotal ? Number(o.subtotal_amount) : Number(o.amount || 0);
   const deliveryFee = hasDeliveryFee ? Number(o.delivery_fee) : 0;
-  const grandTotal = hasGrandTotal ? Number(o.grand_total) : Number(o.amount || subtotal + deliveryFee);
+  const discountAmount = hasDiscount ? Number(o.discount_amount) : 0;
+  const grandTotal = hasGrandTotal ? Number(o.grand_total) : Number(o.amount || subtotal + deliveryFee - discountAmount);
   const location = o.delivery_zone_name || o.delivery_zone_code || '-';
-  return `<div class="border rounded-xl p-4"><div class="flex flex-col sm:flex-row justify-between gap-3"><div><p class="font-bold">Order #${o.id} • ${o.payment_reference || 'N/A'}</p><p class="text-sm">${o.customer_name} • ${o.customer_email}</p><p class="text-xs text-gray-600">Location: ${location}</p><p class="text-xs text-gray-600">Subtotal: ${NGN.format(subtotal)} • Delivery: ${NGN.format(deliveryFee)}</p></div><div class="sm:text-right space-y-2"><p class="font-semibold">${NGN.format(grandTotal)}</p>${statusChip(o.status)}<div><select data-order-status="${o.id}" class="border rounded px-2 py-1 text-sm mt-1">${opts}</select></div></div></div><div class="mt-3 flex flex-wrap gap-2">${quickActions(o)}</div><ul class="text-sm mt-2 list-disc pl-5">${items || '<li>No items</li>'}</ul></div>`;
+  return `<div class="border rounded-xl p-4"><div class="flex flex-col sm:flex-row justify-between gap-3"><div><p class="font-bold">Order #${o.id} • ${o.payment_reference || 'N/A'}</p><p class="text-sm">${o.customer_name} • ${o.customer_email}</p><p class="text-xs text-gray-600">Location: ${location}</p><p class="text-xs text-gray-600">Subtotal: ${NGN.format(subtotal)} • Discount: ${NGN.format(discountAmount)} • Delivery: ${NGN.format(deliveryFee)}</p><p class="text-xs text-gray-600">Coupon: ${o.coupon_code || '-'}</p></div><div class="sm:text-right space-y-2"><p class="font-semibold">${NGN.format(grandTotal)}</p>${statusChip(o.status)}<div><select data-order-status="${o.id}" class="border rounded px-2 py-1 text-sm mt-1">${opts}</select></div></div></div><div class="mt-3 flex flex-wrap gap-2">${quickActions(o)}</div><ul class="text-sm mt-2 list-disc pl-5">${items || '<li>No items</li>'}</ul><div class="mt-3"><textarea data-note-input="${o.id}" class="w-full border rounded p-2 text-xs" rows="2" placeholder="Internal note for team"></textarea><button data-save-note="${o.id}" class="mt-1 px-2 py-1 text-xs border rounded">Save note</button><p class="text-xs text-gray-600 mt-1 whitespace-pre-wrap">${o.internal_notes || ''}</p></div><div class="mt-2 text-xs text-gray-600"><p class="font-semibold">Timeline</p><ul class="list-disc pl-5">${timeline || '<li>No events yet</li>'}</ul></div></div>`;
 }
 
 async function updateOrderStatus(orderId, status) {
@@ -235,6 +238,54 @@ async function fetchOrders() {
       alert(err.message);
     }
   });
+  document.querySelectorAll('[data-save-note]').forEach((btn) => btn.onclick = async () => {
+    const id = btn.dataset.saveNote;
+    const note = document.querySelector(`[data-note-input="${id}"]`)?.value?.trim() || '';
+    if (!note) return;
+    const r = await fetch(`/api/admin/orders/${id}/notes`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ note }) });
+    const d = await r.json();
+    if (!r.ok) return alert(d.error || 'Failed to save note');
+    await fetchOrders();
+  });
+}
+
+async function runCsvUpload() {
+  const csv = $('csv-input')?.value || '';
+  if (!csv.trim()) return;
+  $('csv-upload-msg').textContent = 'Uploading...';
+  const r = await fetch('/api/admin/products/bulk-upload', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ csv }) });
+  const d = await r.json();
+  if (!r.ok) {
+    $('csv-upload-msg').textContent = d.error || 'Upload failed';
+    return;
+  }
+  $('csv-upload-msg').textContent = `Done: ${d.data.successes} success, ${d.data.failures} failed`;
+  $('csv-upload-report').innerHTML = (d.data.report || []).map((x) => `<div class="${x.success ? 'text-green-700' : 'text-red-700'}">Row ${x.row}: ${x.success ? `${x.action} ${x.name}` : x.error}</div>`).join('');
+  await Promise.all([fetchProducts(), fetchMetrics(), fetchLowStock(), fetchLowStockSummary()]);
+}
+
+async function fetchCoupons() {
+  const r = await fetch('/api/admin/coupons', { headers: authHeaders() });
+  const d = await r.json();
+  if (!r.ok) return;
+  $('coupons-wrap').innerHTML = (d.data || []).map((c) => `<div class="border rounded p-2"><p class="font-semibold">${c.code}</p><p>${c.discount_type === 'percent' ? `${c.discount_value}%` : NGN.format(c.discount_value)} off • used ${c.used_count}${c.usage_limit ? `/${c.usage_limit}` : ''}</p></div>`).join('') || '<p class="text-gray-500">No coupons yet.</p>';
+}
+
+async function saveCoupon(e) {
+  e.preventDefault();
+  const payload = {
+    code: $('coupon-code').value.trim(),
+    discount_type: $('coupon-type').value,
+    discount_value: Number($('coupon-value').value),
+    min_order_amount: $('coupon-min').value ? Number($('coupon-min').value) : null,
+    usage_limit: $('coupon-limit').value ? Number($('coupon-limit').value) : null,
+    is_active: true,
+  };
+  const r = await fetch('/api/admin/coupons', { method: 'POST', headers: authHeaders(), body: JSON.stringify(payload) });
+  const d = await r.json();
+  if (!r.ok) return alert(d.error || 'Coupon save failed');
+  $('coupon-form').reset();
+  await fetchCoupons();
 }
 
 async function bootstrap() {
@@ -242,7 +293,7 @@ async function bootstrap() {
   activeOrderFilter = ORDER_FILTERS.includes($('order-filter').value) ? $('order-filter').value : '';
   $('order-filter').value = activeOrderFilter;
   syncOrderFilterButtons();
-  await Promise.all([fetchMetrics(), fetchLowStock(), fetchProducts(), fetchOrders(), fetchNotificationLogs(), fetchLowStockSummary()]);
+  await Promise.all([fetchMetrics(), fetchLowStock(), fetchProducts(), fetchOrders(), fetchNotificationLogs(), fetchLowStockSummary(), fetchCoupons()]);
   $('export-csv').onclick = (e) => {
     e.preventDefault();
     window.open(`/api/admin/orders/export.csv?token=${encodeURIComponent(token)}`, '_blank');
@@ -372,6 +423,9 @@ document.querySelectorAll('.order-filter-btn').forEach((btn) => btn.onclick = as
   syncOrderFilterButtons();
   await fetchOrders();
 });
+$('run-csv-upload').onclick = runCsvUpload;
+$('coupon-form').onsubmit = saveCoupon;
+
 $('logout-btn').onclick = () => {
   token = '';
   localStorage.removeItem(ADMIN_TOKEN_KEY);

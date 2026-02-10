@@ -8,7 +8,7 @@ const cartTotal = document.getElementById('cart-total');
 const searchInput = document.getElementById('product-search');
 const stockToggle = document.getElementById('in-stock-only');
 let cart = JSON.parse(localStorage.getItem(CART_KEY) || '[]');
-let products = []; let activeCategory = ''; let searchTimer;
+let products = []; let activeCategory = ''; let activeHomeTab = 'all'; let searchTimer;
 const sessionId = localStorage.getItem('vicbest_session') || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 localStorage.setItem('vicbest_session', sessionId);
 
@@ -38,6 +38,12 @@ function productCard(p) {
 function renderProducts() {
   carsGrid.innerHTML = products.filter((p) => p.category === 'car').map(productCard).join('') || '<p class="text-gray-500">No vehicles found.</p>';
   groceriesGrid.innerHTML = products.filter((p) => p.category === 'grocery').map(productCard).join('') || '<p class="text-gray-500">No groceries found.</p>';
+  const carsSection = document.getElementById('cars');
+  const grocerySection = document.getElementById('groceries');
+  if (carsSection && grocerySection) {
+    carsSection.classList.toggle('hidden', activeHomeTab === 'grocery');
+    grocerySection.classList.toggle('hidden', activeHomeTab === 'car');
+  }
   document.querySelectorAll('.add-cart').forEach((btn) => btn.addEventListener('click', () => addToCart(Number(btn.dataset.id))));
 }
 
@@ -77,6 +83,12 @@ function initUI() {
   }));
   stockToggle?.addEventListener('change', fetchProducts);
   searchInput?.addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(fetchProducts, 250); });
+  document.querySelectorAll('.home-tab').forEach((btn) => btn.addEventListener('click', () => {
+    activeHomeTab = btn.dataset.homeTab || 'all';
+    document.querySelectorAll('.home-tab').forEach((x) => x.className = 'home-tab px-3 py-2 rounded-full bg-gray-100 text-sm');
+    btn.className = 'home-tab px-3 py-2 rounded-full bg-blue-900 text-white text-sm';
+    renderProducts();
+  }));
 }
 
 (async function boot() { await restoreCart(); initUI(); await fetchProducts(); })();

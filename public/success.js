@@ -19,6 +19,7 @@ async function load() {
     document.getElementById('ref').textContent = orderData.data.payment_reference;
     document.getElementById('status').textContent = orderData.data.status;
     document.getElementById('amount').textContent = new Intl.NumberFormat('en-NG').format(orderData.data.amount);
+    document.getElementById('track-link').href = `/track/${encodeURIComponent(orderData.data.payment_reference)}`;
 
     statusText.textContent = orderData.data.status === 'paid'
       ? 'Payment successful. Your order has been confirmed.'
