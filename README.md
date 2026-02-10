@@ -200,6 +200,10 @@ openclaw cron create --name vicbest-low-stock --schedule "0 8 * * *" --cwd "C:\U
 - `/api/orders/:reference` is restricted for linked orders (owner only)
 - Backward compatibility is preserved for older orders without delivery columns (defaults used in admin/export views)
 
+## Deployment guide
+
+- Render go-live checklist: `docs/RENDER-GO-LIVE.md`
+
 ## Quick test checklist
 
 - [ ] Admin login works

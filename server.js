@@ -1191,6 +1191,9 @@ app.post("/api/checkout/initialize", async (req, res) => {
       cartSubtotal: discountedSubtotal,
     });
     if (delivery.status !== 200) return res.status(delivery.status).json({ error: delivery.error });
+    if (!process.env.PAYSTACK_SECRET_KEY) {
+      return res.status(500).json({ error: "PAYSTACK_SECRET_KEY missing" });
+    }
 
     const reference = genRef();
     const customerName = safeText(customer.name || req.user?.name || "", MAX_INPUT_LENGTH.name);
@@ -1244,10 +1247,6 @@ app.post("/api/checkout/initialize", async (req, res) => {
 
     if (createdOrderBundle) {
       Promise.resolve(notifyNewOrder(createdOrderBundle.order, createdOrderBundle.items)).catch(() => {});
-    }
-
-    if (!process.env.PAYSTACK_SECRET_KEY) {
-      return res.status(500).json({ error: "PAYSTACK_SECRET_KEY missing" });
     }
 
     const response = await fetch("https://api.paystack.co/transaction/initialize", {
