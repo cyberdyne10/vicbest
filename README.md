@@ -39,6 +39,7 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 
 - Admin login (`/api/admin/login`)
 - Manage products (`/api/admin/products` CRUD)
+- Simple admin product form with quick category selector (Cars/Groceries), optional image file upload, and URL fallback
 - View/update orders (`/api/admin/orders`, `/api/admin/orders/:id/status`) with quick status buttons + grouped status filters (`new`, `processing`, `delivered`, `cancelled`)
 - Order export now includes delivery location, subtotal, delivery fee, and grand total
 - View recent notification logs (`/api/admin/notifications/logs`) directly in admin UI
@@ -125,6 +126,15 @@ INVENTORY_JOB_SECRET=replace_with_inventory_job_secret
 ### My orders (protected)
 
 `GET /api/orders/me`
+
+### Product image uploads (admin)
+
+- Upload endpoint: `POST /api/admin/uploads/product-image` (admin auth required)
+- Storage path: `public/uploads/`
+- Returned URL format: `/uploads/<generated-file-name>`
+- Supported formats: JPG, PNG, WEBP, GIF
+- Upload limit: **4MB** per image
+- Admin can still paste an external image URL instead of uploading
 
 ### Inventory automation endpoints
 
