@@ -22,6 +22,8 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 - Payment verification (`/api/paystack/verify/:reference`) + webhook (`/api/paystack/webhook`)
 - Automated notifications on new orders (customer + admin) with graceful fallback when SMTP is not configured
 - Automated customer status-update notifications for `processing`, `delivered`, and `cancelled`
+- Threshold-aware low-stock tracking per product (`stock_quantity <= low_stock_threshold`, default threshold = 5)
+- Daily low-stock summary endpoint + manual/scheduler run endpoints (cron-ready)
 - Notification event logs stored in SQLite (`notification_logs`) and visible in admin UI
 
 ### User Accounts (Phase 3)
@@ -78,6 +80,7 @@ SMTP_PASS=replace_with_smtp_password
 SMTP_FROM="Vicbest Store <notifications@example.com>"
 ADMIN_NOTIFICATION_EMAILS=owner@example.com,ops@example.com
 STORE_WHATSAPP_NUMBER=2348091747685
+INVENTORY_JOB_SECRET=replace_with_inventory_job_secret
 ```
 
 > Never commit real secrets.
@@ -119,6 +122,13 @@ STORE_WHATSAPP_NUMBER=2348091747685
 ### My orders (protected)
 
 `GET /api/orders/me`
+
+### Inventory automation endpoints
+
+- `GET /api/admin/products/low-stock` — threshold-aware low-stock list for dashboard
+- `GET /api/admin/products/low-stock-summary` — current low-stock summary payload
+- `POST /api/admin/products/low-stock-summary/run` — manual run + admin email send
+- `POST /api/jobs/low-stock-summary/run?key=INVENTORY_JOB_SECRET` — cron/scheduler trigger route
 
 ---
 

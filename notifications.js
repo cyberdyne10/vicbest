@@ -198,8 +198,12 @@ async function notifyCustomerOrderCreated(order, items = []) {
   }
 }
 
+function getAdminRecipients() {
+  return normalizeEmails(process.env.ADMIN_NOTIFICATION_EMAILS || "");
+}
+
 async function notifyAdminOrderCreated(order, items = []) {
-  const recipients = normalizeEmails(process.env.ADMIN_NOTIFICATION_EMAILS || "");
+  const recipients = getAdminRecipients();
   const eventType = "order_created_admin";
   const totals = orderTotals(order);
 
@@ -329,7 +333,74 @@ async function notifyOrderStatusChanged(order, previousStatus, nextStatus) {
   }
 }
 
+async function notifyAdminLowStockSummary(summary = {}, meta = {}) {
+  const recipients = getAdminRecipients();
+  const eventType = "low_stock_daily_summary";
+
+  if (!recipients.length) {
+    await logNotification({
+      eventType,
+      channel: "email",
+      recipient: "",
+      status: "skipped",
+      error: "ADMIN_NOTIFICATION_EMAILS not configured",
+      payload: { meta, lowStockCount: summary.lowStockCount || 0 },
+    });
+    return { sent: 0, failed: 0, skipped: true };
+  }
+
+  if (!hasSmtpConfig()) {
+    for (const recipient of recipients) {
+      await logNotification({
+        eventType,
+        channel: "email",
+        recipient,
+        status: "skipped",
+        error: "SMTP not configured",
+        payload: { meta, lowStockCount: summary.lowStockCount || 0 },
+      });
+    }
+    return { sent: 0, failed: 0, skipped: true };
+  }
+
+  const lines = (summary.products || []).map(
+    (item, idx) => `${idx + 1}. ${item.name} (${item.category}) — Qty ${item.stock_quantity} / Threshold ${item.low_stock_threshold}`
+  );
+  const subject = `Daily low-stock summary: ${summary.lowStockCount || 0} alert(s)`;
+  const text = [
+    "Vicbest Store low-stock daily summary",
+    `Generated: ${summary.generatedAt || new Date().toISOString()}`,
+    `In-stock products tracked: ${summary.totalInStockProducts || 0}`,
+    `Low-stock alerts: ${summary.lowStockCount || 0}`,
+    "",
+    ...(lines.length ? lines : ["No low-stock products right now."]),
+  ].join("\n");
+  const html = `
+    <h3>Vicbest Store — Low-stock daily summary</h3>
+    <p><strong>Generated:</strong> ${summary.generatedAt || new Date().toISOString()}<br>
+    <strong>In-stock products tracked:</strong> ${summary.totalInStockProducts || 0}<br>
+    <strong>Low-stock alerts:</strong> ${summary.lowStockCount || 0}</p>
+    <ul>${(summary.products || []).map((item) => `<li>${item.name} (${item.category}) — Qty <strong>${item.stock_quantity}</strong> / Threshold <strong>${item.low_stock_threshold}</strong></li>`).join("") || "<li>No low-stock products right now.</li>"}</ul>
+  `;
+
+  let sent = 0;
+  let failed = 0;
+  for (const recipient of recipients) {
+    try {
+      await sendEmail({ to: recipient, subject, text, html });
+      sent += 1;
+      await logNotification({ eventType, channel: "email", recipient, status: "sent", payload: { meta, lowStockCount: summary.lowStockCount || 0 } });
+    } catch (err) {
+      failed += 1;
+      await logNotification({ eventType, channel: "email", recipient, status: "failed", error: err.message, payload: { meta, lowStockCount: summary.lowStockCount || 0 } });
+    }
+  }
+
+  return { sent, failed, skipped: false };
+}
+
 module.exports = {
   notifyNewOrder,
   notifyOrderStatusChanged,
+  notifyAdminLowStockSummary,
 };

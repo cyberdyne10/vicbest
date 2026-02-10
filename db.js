@@ -105,6 +105,15 @@ async function applyMigrations() {
       },
     },
     {
+      name: "20260210_add_product_low_stock_threshold",
+      up: async () => {
+        if (!(await columnExists("products", "low_stock_threshold"))) {
+          await run(`ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER NOT NULL DEFAULT 5`);
+        }
+        await run(`UPDATE products SET low_stock_threshold = 5 WHERE low_stock_threshold IS NULL`);
+      },
+    },
+    {
       name: "20260210_add_delivery_zone_and_order_fee_columns",
       up: async () => {
         await run(`CREATE TABLE IF NOT EXISTS delivery_zones (
@@ -222,6 +231,7 @@ async function initDb() {
     metadata TEXT,
     in_stock INTEGER DEFAULT 1,
     stock_quantity INTEGER NOT NULL DEFAULT 10,
+    low_stock_threshold INTEGER NOT NULL DEFAULT 5,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
 

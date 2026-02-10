@@ -4,7 +4,7 @@ const bcrypt = require("bcrypt");
 const express = require("express");
 const path = require("path");
 const { initDb, all, get, run } = require("./db");
-const { notifyNewOrder, notifyOrderStatusChanged } = require("./notifications");
+const { notifyNewOrder, notifyOrderStatusChanged, notifyAdminLowStockSummary } = require("./notifications");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -25,6 +25,7 @@ const MAX_INPUT_LENGTH = {
   productDescription: 2000,
   imageUrl: 1000,
 };
+const DEFAULT_LOW_STOCK_THRESHOLD = 5;
 
 const rateStore = new Map();
 
@@ -274,6 +275,9 @@ function toProductPayload(body = {}) {
   const image_url = safeText(body.image_url, MAX_INPUT_LENGTH.imageUrl);
   const in_stock = body.in_stock ? 1 : 0;
   const stock_quantity = Math.max(0, Number(body.stock_quantity) || 0);
+  const low_stock_threshold = body.low_stock_threshold === undefined || body.low_stock_threshold === null || body.low_stock_threshold === ""
+    ? DEFAULT_LOW_STOCK_THRESHOLD
+    : Number(body.low_stock_threshold);
 
   let metadata = body.metadata || {};
   if (typeof metadata === "string") {
@@ -289,12 +293,56 @@ function toProductPayload(body = {}) {
   if (!VALID_CATEGORIES.has(category)) errors.push("category must be 'car' or 'grocery'");
   if (!Number.isInteger(price) || price < 0) errors.push("price must be a non-negative integer");
   if (!Number.isInteger(stock_quantity) || stock_quantity < 0) errors.push("stock_quantity must be a non-negative integer");
+  if (!Number.isInteger(low_stock_threshold) || low_stock_threshold < 0) errors.push("low_stock_threshold must be a non-negative integer");
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) errors.push("metadata must be an object");
 
   return {
     errors,
-    data: { name, category, price, description, image_url, metadata: JSON.stringify(metadata), in_stock, stock_quantity },
+    data: {
+      name,
+      category,
+      price,
+      description,
+      image_url,
+      metadata: JSON.stringify(metadata),
+      in_stock,
+      stock_quantity,
+      low_stock_threshold,
+    },
   };
+}
+
+async function fetchLowStockProducts() {
+  return all(
+    `SELECT id, name, category, stock_quantity, low_stock_threshold, in_stock
+     FROM products
+     WHERE in_stock = 1 AND stock_quantity <= COALESCE(low_stock_threshold, ?)
+     ORDER BY stock_quantity ASC, id ASC`,
+    [DEFAULT_LOW_STOCK_THRESHOLD]
+  );
+}
+
+async function getLowStockSummary() {
+  const products = await fetchLowStockProducts();
+  const totals = await get("SELECT COUNT(*) AS total FROM products WHERE in_stock = 1");
+  return {
+    generatedAt: new Date().toISOString(),
+    totalInStockProducts: totals?.total || 0,
+    lowStockCount: products.length,
+    products: products.map((p) => ({
+      ...p,
+      stock_quantity: Number(p.stock_quantity || 0),
+      low_stock_threshold: Number(p.low_stock_threshold ?? DEFAULT_LOW_STOCK_THRESHOLD),
+      deficit: Number(p.low_stock_threshold ?? DEFAULT_LOW_STOCK_THRESHOLD) - Number(p.stock_quantity || 0),
+    })),
+  };
+}
+
+function hasInventoryJobAccess(req) {
+  const secret = String(process.env.INVENTORY_JOB_SECRET || "").trim();
+  if (!secret) return false;
+  const supplied = safeText(req.headers["x-job-secret"] || req.query?.key || req.body?.key, 300);
+  return supplied && supplied === secret;
 }
 
 app.use(attachUser);
@@ -496,8 +544,8 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
     if (errors.length > 0) return res.status(400).json({ error: errors.join(", ") });
 
     const result = await run(
-      `INSERT INTO products (name, category, price, description, image_url, metadata, in_stock, stock_quantity)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO products (name, category, price, description, image_url, metadata, in_stock, stock_quantity, low_stock_threshold)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         data.name,
         data.category,
@@ -507,6 +555,7 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
         data.metadata,
         data.in_stock,
         data.stock_quantity,
+        data.low_stock_threshold,
       ]
     );
 
@@ -530,7 +579,7 @@ app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
 
     await run(
       `UPDATE products
-       SET name = ?, category = ?, price = ?, description = ?, image_url = ?, metadata = ?, in_stock = ?, stock_quantity = ?
+       SET name = ?, category = ?, price = ?, description = ?, image_url = ?, metadata = ?, in_stock = ?, stock_quantity = ?, low_stock_threshold = ?
        WHERE id = ?`,
       [
         data.name,
@@ -541,6 +590,7 @@ app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
         data.metadata,
         data.in_stock,
         data.stock_quantity,
+        data.low_stock_threshold,
         productId,
       ]
     );
@@ -1002,12 +1052,49 @@ app.get("/api/admin/dashboard/metrics", requireAdmin, async (_, res) => {
 
 app.get("/api/admin/products/low-stock", requireAdmin, async (_, res) => {
   try {
-    const rows = await all(
-      "SELECT id, name, category, stock_quantity, in_stock FROM products WHERE in_stock = 1 AND stock_quantity <= 5 ORDER BY stock_quantity ASC, id ASC"
-    );
-    res.json({ data: rows });
+    const rows = await fetchLowStockProducts();
+    res.json({
+      data: rows.map((row) => ({
+        ...row,
+        stock_quantity: Number(row.stock_quantity || 0),
+        low_stock_threshold: Number(row.low_stock_threshold ?? DEFAULT_LOW_STOCK_THRESHOLD),
+      })),
+    });
   } catch {
     res.status(500).json({ error: "Failed to fetch low-stock products" });
+  }
+});
+
+app.get("/api/admin/products/low-stock-summary", requireAdmin, async (_, res) => {
+  try {
+    const summary = await getLowStockSummary();
+    res.json({ data: summary });
+  } catch {
+    res.status(500).json({ error: "Failed to build low-stock summary" });
+  }
+});
+
+app.post("/api/admin/products/low-stock-summary/run", requireAdmin, async (req, res) => {
+  try {
+    const summary = await getLowStockSummary();
+    const result = await notifyAdminLowStockSummary(summary, { source: "manual_admin", actor: req.admin?.role || "admin" });
+    res.json({ data: { summary, notification: result } });
+  } catch {
+    res.status(500).json({ error: "Failed to run low-stock summary" });
+  }
+});
+
+app.post("/api/jobs/low-stock-summary/run", async (req, res) => {
+  if (!hasInventoryJobAccess(req)) {
+    return res.status(401).json({ error: "Unauthorized job trigger" });
+  }
+
+  try {
+    const summary = await getLowStockSummary();
+    const result = await notifyAdminLowStockSummary(summary, { source: "scheduler_job" });
+    res.json({ ok: true, data: { summary, notification: result } });
+  } catch {
+    res.status(500).json({ error: "Failed to run scheduled low-stock summary" });
   }
 });
 
