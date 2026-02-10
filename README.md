@@ -43,6 +43,10 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 - View/update orders (`/api/admin/orders`, `/api/admin/orders/:id/status`) with quick status buttons + grouped status filters (`new`, `processing`, `delivered`, `cancelled`)
 - Order export now includes delivery location, subtotal, delivery fee, and grand total
 - View recent notification logs (`/api/admin/notifications/logs`) directly in admin UI
+- Bulk product CSV upload in admin with row-by-row success/error report (`/api/admin/products/bulk-upload`)
+- Admin coupons (fixed/percent, active windows, optional usage limits)
+- Admin order internal notes + timeline events persisted in DB
+- Public order tracking page by reference (`/track/:reference`, `GET /api/orders/track/:reference`)
 
 ---
 
@@ -195,3 +199,15 @@ openclaw cron create --name vicbest-low-stock --schedule "0 8 * * *" --cwd "C:\U
 - If checkout is done while logged in, the order is linked to `user_id`
 - `/api/orders/:reference` is restricted for linked orders (owner only)
 - Backward compatibility is preserved for older orders without delivery columns (defaults used in admin/export views)
+
+## Quick test checklist
+
+- [ ] Admin login works
+- [ ] Create/update single product still works
+- [ ] Bulk CSV upload creates/updates products and shows per-row report
+- [ ] Homepage tabs (All/Cars/Groceries) and chip filters both work
+- [ ] Create order (WhatsApp + card init), apply valid coupon, verify totals (subtotal/discount/delivery/grand total)
+- [ ] Invalid/expired coupon is rejected
+- [ ] Admin can add order note and sees timeline updates for note + status change
+- [ ] Public tracking page `/track/:reference` shows status + key details
+- [ ] Orders CSV export includes `discount_amount` and `coupon_code`
