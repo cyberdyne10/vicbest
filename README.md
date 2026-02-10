@@ -16,7 +16,9 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 
 - Product catalog (`/api/products`) with seeded cars and groceries
 - Cart in browser + optional server sync (`/api/cart/sync`)
-- Checkout (`/checkout`) with Paystack initialization
+- Checkout (`/checkout`) with location-based delivery fees + Paystack initialization
+- Delivery zone config seeded in SQLite (`delivery_zones`) with defaults: Lagos Mainland, Lagos Island, Abuja, Outside Coverage
+- Delivery quote endpoints: `GET /api/delivery/zones`, `POST /api/delivery/calculate`
 - Payment verification (`/api/paystack/verify/:reference`) + webhook (`/api/paystack/webhook`)
 
 ### User Accounts (Phase 3)
@@ -33,6 +35,7 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 - Admin login (`/api/admin/login`)
 - Manage products (`/api/admin/products` CRUD)
 - View/update orders (`/api/admin/orders`, `/api/admin/orders/:id/status`)
+- Order export now includes delivery location, subtotal, delivery fee, and grand total
 
 ---
 
@@ -119,3 +122,4 @@ USER_TOKEN_SECRET=replace_with_another_long_random_string
 - Guest orders still work (no account required)
 - If checkout is done while logged in, the order is linked to `user_id`
 - `/api/orders/:reference` is restricted for linked orders (owner only)
+- Backward compatibility is preserved for older orders without delivery columns (defaults used in admin/export views)
