@@ -35,21 +35,51 @@
           <h3 class="text-lg font-bold mb-4">Product Form</h3>
           <form id="product-form" class="space-y-3">
             <input type="hidden" id="product-id" />
-            <input id="product-name" class="w-full border rounded-lg px-3 py-2" placeholder="Name" required />
+
+            <label class="block text-sm font-medium">Product name
+              <input id="product-name" class="mt-1 w-full border rounded-lg px-3 py-2" placeholder="e.g. Toyota Camry 2019" required />
+            </label>
+
             <div class="grid grid-cols-2 gap-3">
-              <select id="product-category" class="w-full border rounded-lg px-3 py-2">
-                <option value="car">car</option>
-                <option value="grocery">grocery</option>
-              </select>
-              <input id="product-price" type="number" min="0" class="w-full border rounded-lg px-3 py-2" placeholder="Price" required />
+              <label class="block text-sm font-medium">Category
+                <select id="product-category" class="mt-1 w-full border rounded-lg px-3 py-2" required>
+                  <option value="car">Cars</option>
+                  <option value="grocery">Groceries</option>
+                  <option id="product-category-legacy" value="" class="hidden"></option>
+                </select>
+                <span class="text-xs text-gray-500">Pick one to publish quickly.</span>
+              </label>
+              <label class="block text-sm font-medium">Price (NGN)
+                <input id="product-price" type="number" min="0" class="mt-1 w-full border rounded-lg px-3 py-2" placeholder="e.g. 4500000" required />
+              </label>
             </div>
+
             <div class="grid grid-cols-2 gap-3">
-              <input id="product-stock-qty" type="number" min="0" class="w-full border rounded-lg px-3 py-2" placeholder="Stock quantity" value="10" />
-              <input id="product-low-threshold" type="number" min="0" class="w-full border rounded-lg px-3 py-2" placeholder="Low-stock threshold" value="5" />
+              <label class="block text-sm font-medium">Stock quantity
+                <input id="product-stock-qty" type="number" min="0" class="mt-1 w-full border rounded-lg px-3 py-2" value="10" />
+              </label>
+              <label class="block text-sm font-medium">Low-stock alert at
+                <input id="product-low-threshold" type="number" min="0" class="mt-1 w-full border rounded-lg px-3 py-2" value="5" />
+              </label>
             </div>
-            <input id="product-image" class="w-full border rounded-lg px-3 py-2" placeholder="Image URL" />
-            <textarea id="product-description" class="w-full border rounded-lg px-3 py-2" rows="3" placeholder="Description"></textarea>
-            <textarea id="product-metadata" class="w-full border rounded-lg px-3 py-2 font-mono text-sm" rows="3">{}</textarea>
+
+            <label class="block text-sm font-medium">Upload product image (optional)
+              <input id="product-image-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="mt-1 w-full border rounded-lg px-3 py-2" />
+              <span class="text-xs text-gray-500">JPG, PNG, WEBP, GIF • max 4MB.</span>
+            </label>
+
+            <label class="block text-sm font-medium">Or paste image URL (optional)
+              <input id="product-image" class="mt-1 w-full border rounded-lg px-3 py-2" placeholder="https://... or /uploads/..." />
+            </label>
+
+            <label class="block text-sm font-medium">Description (optional)
+              <textarea id="product-description" class="mt-1 w-full border rounded-lg px-3 py-2" rows="3" placeholder="Short summary for customers"></textarea>
+            </label>
+
+            <label class="block text-sm font-medium">Metadata JSON (optional)
+              <textarea id="product-metadata" class="mt-1 w-full border rounded-lg px-3 py-2 font-mono text-sm" rows="3">{}</textarea>
+            </label>
+
             <label class="inline-flex items-center gap-2 text-sm"><input id="product-stock" type="checkbox" checked /> In stock</label>
             <div class="flex gap-2">
               <button class="flex-1 bg-blue-900 text-white py-2 rounded-lg font-semibold" type="submit">Save Product</button>

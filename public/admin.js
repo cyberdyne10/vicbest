@@ -11,6 +11,30 @@ let orderSearchDebounce = null;
 const $ = (id) => document.getElementById(id);
 const authHeaders = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
 
+function normalizeCategory(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'cars') return 'car';
+  if (raw === 'groceries') return 'grocery';
+  return raw;
+}
+
+function setLegacyCategoryOption(category) {
+  const select = $('product-category');
+  const legacyOption = $('product-category-legacy');
+  const normalized = normalizeCategory(category);
+  const standard = ['car', 'grocery'];
+  if (!normalized || standard.includes(normalized)) {
+    legacyOption.value = '';
+    legacyOption.textContent = '';
+    legacyOption.classList.add('hidden');
+    return;
+  }
+  legacyOption.value = normalized;
+  legacyOption.textContent = `Legacy: ${normalized}`;
+  legacyOption.classList.remove('hidden');
+}
+
+
 function setAuthState(ok) {
   $('login-card').classList.toggle('hidden', ok);
   $('dashboard').classList.toggle('hidden', !ok);
@@ -103,11 +127,13 @@ async function fetchNotificationLogs() {
 function fillForm(p) {
   $('product-id').value = p.id;
   $('product-name').value = p.name;
-  $('product-category').value = p.category;
+  setLegacyCategoryOption(p.category);
+  $('product-category').value = normalizeCategory(p.category) || 'car';
   $('product-price').value = p.price;
   $('product-stock-qty').value = p.stock_quantity ?? 0;
   $('product-low-threshold').value = p.low_stock_threshold ?? 5;
   $('product-image').value = p.image_url || '';
+  $('product-image-file').value = '';
   $('product-description').value = p.description || '';
   $('product-metadata').value = JSON.stringify(p.metadata || {}, null, 2);
   $('product-stock').checked = Boolean(p.in_stock);
@@ -116,6 +142,8 @@ function fillForm(p) {
 function resetForm() {
   ['product-id', 'product-name', 'product-price', 'product-image', 'product-description'].forEach((k) => $(k).value = '');
   $('product-category').value = 'car';
+  $('product-image-file').value = '';
+  setLegacyCategoryOption('');
   $('product-stock-qty').value = '10';
   $('product-low-threshold').value = '5';
   $('product-metadata').value = '{}';
@@ -234,27 +262,83 @@ $('login-form').onsubmit = async (e) => {
   }
 };
 
+async function uploadImageIfNeeded() {
+  const file = $('product-image-file').files?.[0];
+  if (!file) return null;
+
+  const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+  if (!allowed.includes(file.type)) throw new Error('Upload only JPG, PNG, WEBP, or GIF images.');
+  if (file.size > 4 * 1024 * 1024) throw new Error('Image must be 4MB or less.');
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.readAsDataURL(file);
+  });
+
+  const uploadRes = await fetch('/api/admin/uploads/product-image', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ fileName: file.name, dataUrl }),
+  });
+  const uploadData = await uploadRes.json();
+  if (!uploadRes.ok) throw new Error(uploadData.error || 'Image upload failed');
+  return uploadData?.data?.image_url || null;
+}
+
+function validateProductForm(payload) {
+  if (!payload.name) return 'Product name is required.';
+  if (!payload.category) return 'Please choose Cars or Groceries.';
+  if (!Number.isInteger(payload.price) || payload.price < 0) return 'Price must be a valid number.';
+  if (!Number.isInteger(payload.stock_quantity) || payload.stock_quantity < 0) return 'Stock quantity must be 0 or higher.';
+  if (!Number.isInteger(payload.low_stock_threshold) || payload.low_stock_threshold < 0) return 'Low-stock alert must be 0 or higher.';
+
+  if (payload.image_url && !payload.image_url.startsWith('/uploads/') && !/^https?:\/\//i.test(payload.image_url)) {
+    return 'Image URL must start with https://, http://, or /uploads/.';
+  }
+
+  if (payload.metadata) {
+    try {
+      const parsed = JSON.parse(payload.metadata);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'Metadata must be a JSON object (or {}).';
+    } catch {
+      return 'Metadata must be valid JSON. Use {} if unsure.';
+    }
+  }
+
+  return null;
+}
+
 $('product-form').onsubmit = async (e) => {
   e.preventDefault();
   try {
+    $('product-form-msg').textContent = 'Saving...';
     const id = $('product-id').value;
+    const uploadedImageUrl = await uploadImageIfNeeded();
+    if (uploadedImageUrl) $('product-image').value = uploadedImageUrl;
+
     const payload = {
-      name: $('product-name').value,
-      category: $('product-category').value,
+      name: $('product-name').value.trim(),
+      category: normalizeCategory($('product-category').value),
       price: Number($('product-price').value),
       stock_quantity: Number($('product-stock-qty').value),
       low_stock_threshold: Number($('product-low-threshold').value),
-      image_url: $('product-image').value,
-      description: $('product-description').value,
-      metadata: $('product-metadata').value,
+      image_url: $('product-image').value.trim(),
+      description: $('product-description').value.trim(),
+      metadata: $('product-metadata').value.trim() || '{}',
       in_stock: $('product-stock').checked,
     };
+
+    const validationError = validateProductForm(payload);
+    if (validationError) throw new Error(validationError);
+
     const r = await fetch(id ? `/api/admin/products/${id}` : '/api/admin/products', {
       method: id ? 'PUT' : 'POST', headers: authHeaders(), body: JSON.stringify(payload)
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Save failed');
-    $('product-form-msg').textContent = 'Saved.';
+    $('product-form-msg').textContent = 'Saved. Product is live.';
     resetForm();
     await Promise.all([fetchProducts(), fetchLowStock(), fetchLowStockSummary(), fetchMetrics()]);
   } catch (err) {
@@ -263,6 +347,11 @@ $('product-form').onsubmit = async (e) => {
 };
 
 $('reset-product').onclick = resetForm;
+$('product-category').onchange = () => {
+  if (['car', 'grocery'].includes(normalizeCategory($('product-category').value))) {
+    setLegacyCategoryOption('');
+  }
+};
 $('order-filter').onchange = async (e) => {
   activeOrderFilter = ORDER_FILTERS.includes(e.target.value) ? e.target.value : '';
   syncOrderFilterButtons();

@@ -1,5 +1,6 @@
 require("dotenv").config();
 const crypto = require("crypto");
+const fs = require("fs");
 const bcrypt = require("bcrypt");
 const express = require("express");
 const path = require("path");
@@ -27,11 +28,18 @@ const MAX_INPUT_LENGTH = {
   imageUrl: 1000,
 };
 const DEFAULT_LOW_STOCK_THRESHOLD = 5;
+const UPLOADS_DIR = path.join(__dirname, "public", "uploads");
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+const ALLOWED_UPLOAD_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
 const rateStore = new Map();
 
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
 app.use("/api/paystack/webhook", express.raw({ type: "application/json" }));
-app.use(express.json());
+app.use(express.json({ limit: "6mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 function parseCookies(req) {
@@ -61,6 +69,13 @@ function normalizeEmail(email = "") {
 
 function safeText(value, max = 255) {
   return String(value || "").trim().slice(0, max);
+}
+
+function normalizeCategory(rawValue) {
+  const value = safeText(rawValue, 80).toLowerCase();
+  if (value === "cars") return "car";
+  if (value === "groceries") return "grocery";
+  return value;
 }
 
 function parseCartItems(items, productMap) {
@@ -270,7 +285,7 @@ function requireAdmin(req, res, next) {
 
 function toProductPayload(body = {}) {
   const name = safeText(body.name, MAX_INPUT_LENGTH.productName);
-  const category = String(body.category || "").trim();
+  const category = normalizeCategory(body.category);
   const price = Number(body.price);
   const description = safeText(body.description, MAX_INPUT_LENGTH.productDescription);
   const image_url = safeText(body.image_url, MAX_INPUT_LENGTH.imageUrl);
@@ -291,7 +306,7 @@ function toProductPayload(body = {}) {
 
   const errors = [];
   if (!name) errors.push("name is required");
-  if (!VALID_CATEGORIES.has(category)) errors.push("category must be 'car' or 'grocery'");
+  if (!category) errors.push("category is required");
   if (!Number.isInteger(price) || price < 0) errors.push("price must be a non-negative integer");
   if (!Number.isInteger(stock_quantity) || stock_quantity < 0) errors.push("stock_quantity must be a non-negative integer");
   if (!Number.isInteger(low_stock_threshold) || low_stock_threshold < 0) errors.push("low_stock_threshold must be a non-negative integer");
@@ -500,6 +515,42 @@ app.post("/api/admin/login", rateLimit({ windowMs: 60_000, maxRequests: 12 }), (
 
   const token = signAdminToken({ role: "admin", exp: Date.now() + 12 * 60 * 60 * 1000 });
   res.json({ token, expiresInHours: 12 });
+});
+
+app.post("/api/admin/uploads/product-image", requireAdmin, rateLimit({ windowMs: 60_000, maxRequests: 20 }), async (req, res) => {
+  try {
+    const fileName = safeText(req.body?.fileName, 150) || "product-image";
+    const dataUrl = String(req.body?.dataUrl || "");
+
+    const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) return res.status(400).json({ error: "Invalid image payload" });
+
+    const mimeType = String(match[1]).toLowerCase();
+    if (!ALLOWED_UPLOAD_MIME_TYPES.has(mimeType)) {
+      return res.status(400).json({ error: "Only JPG, PNG, WEBP, and GIF are supported" });
+    }
+
+    const bytes = Buffer.from(match[2], "base64");
+    if (!bytes.length) return res.status(400).json({ error: "Image is empty" });
+    if (bytes.length > MAX_UPLOAD_BYTES) {
+      return res.status(400).json({ error: `Image too large. Max ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))}MB` });
+    }
+
+    const extensionByMime = {
+      "image/jpeg": ".jpg",
+      "image/png": ".png",
+      "image/webp": ".webp",
+      "image/gif": ".gif",
+    };
+    const ext = extensionByMime[mimeType] || path.extname(fileName).toLowerCase() || ".jpg";
+    const outputName = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${ext}`;
+    const outputPath = path.join(UPLOADS_DIR, outputName);
+
+    await fs.promises.writeFile(outputPath, bytes);
+    return res.status(201).json({ data: { image_url: `/uploads/${outputName}` } });
+  } catch {
+    return res.status(500).json({ error: "Image upload failed" });
+  }
 });
 
 app.get("/api/products", async (req, res) => {
