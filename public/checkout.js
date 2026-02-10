@@ -6,6 +6,7 @@ const summarySubtotal = document.getElementById('summary-subtotal');
 const summaryDelivery = document.getElementById('summary-delivery');
 const summaryTotal = document.getElementById('summary-total');
 const form = document.getElementById('checkout-form'); const errorBox = document.getElementById('error');
+const submitBtn = document.getElementById('submit-btn');
 const locationSelect = document.getElementById('delivery-zone');
 let products = []; let cart = JSON.parse(localStorage.getItem(CART_KEY) || '[]'); let deliveryQuote = null;
 
@@ -80,16 +81,37 @@ form.addEventListener('submit', async (e) => {
   if (document.getElementById('save-info').checked) localStorage.setItem(PREFS_KEY, JSON.stringify({ ...customer }));
 
   const endpoint = method === 'card' ? '/api/checkout/initialize' : '/api/orders/whatsapp';
-  const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customer, items: cart }) });
-  const data = await res.json(); if (!res.ok) return (errorBox.textContent = data.error || 'Checkout failed');
 
-  if (method === 'card') {
-    if (!data?.data?.authorization_url) return (errorBox.textContent = 'Card checkout is not configured yet.');
-    localStorage.removeItem(CART_KEY); window.location.href = data.data.authorization_url; return;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.classList.add('opacity-70', 'cursor-not-allowed');
+    submitBtn.textContent = method === 'card' ? 'Processing card checkout...' : 'Connecting to WhatsApp...';
   }
 
-  const order = data.data; const lines = ['Hello Vicbest Store, I want to complete this order:', `Order Ref: ${order.reference}`, '', ...order.items.map((m, i) => `${i + 1}. ${m.productName} x ${m.quantity} - ${NGN.format(m.lineTotal)}`), '', `Subtotal: ${NGN.format(Number(order.subtotalAmount || 0))}`, `Delivery (${order.deliveryZoneName || customer.deliveryZoneCode}): ${NGN.format(Number(order.deliveryFee || 0))}`, `Grand Total: ${NGN.format(Number(order.grandTotal || order.amount || 0))}`, '', `Name: ${customer.name}`, `Email: ${customer.email}`, `Phone: ${customer.phone || '-'}`, `Address: ${customer.address || '-'}`, `Location: ${order.deliveryZoneName || customer.deliveryZoneCode}`, `Notes: ${customer.notes || '-'}`];
-  localStorage.removeItem(CART_KEY); window.location.href = `https://wa.me/${STORE_WHATSAPP_NUMBER}?text=${encodeURIComponent(lines.join('\n'))}`;
+  try {
+    const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customer, items: cart }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Checkout failed');
+
+    if (method === 'card') {
+      if (!data?.data?.authorization_url) throw new Error('Card checkout is not configured yet.');
+      localStorage.removeItem(CART_KEY);
+      window.location.href = data.data.authorization_url;
+      return;
+    }
+
+    const order = data.data;
+    const lines = ['Hello Vicbest Store, I want to complete this order:', `Order Ref: ${order.reference}`, '', ...order.items.map((m, i) => `${i + 1}. ${m.productName} x ${m.quantity} - ${NGN.format(m.lineTotal)}`), '', `Subtotal: ${NGN.format(Number(order.subtotalAmount || 0))}`, `Delivery (${order.deliveryZoneName || customer.deliveryZoneCode}): ${NGN.format(Number(order.deliveryFee || 0))}`, `Grand Total: ${NGN.format(Number(order.grandTotal || order.amount || 0))}`, '', `Name: ${customer.name}`, `Email: ${customer.email}`, `Phone: ${customer.phone || '-'}`, `Address: ${customer.address || '-'}`, `Location: ${order.deliveryZoneName || customer.deliveryZoneCode}`, `Notes: ${customer.notes || '-'}`];
+    localStorage.removeItem(CART_KEY);
+    window.location.href = `https://wa.me/${STORE_WHATSAPP_NUMBER}?text=${encodeURIComponent(lines.join('\n'))}`;
+  } catch (err) {
+    errorBox.textContent = err.message || 'Checkout failed';
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('opacity-70', 'cursor-not-allowed');
+      submitBtn.textContent = 'Complete Checkout';
+    }
+  }
 });
 
 init();

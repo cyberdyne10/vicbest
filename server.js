@@ -670,9 +670,10 @@ app.post("/api/orders/whatsapp", async (req, res) => {
     }
 
     const createdOrderBundle = await fetchOrderWithItems(orderResult.id);
-    const notificationResult = createdOrderBundle
-      ? await notifyNewOrder(createdOrderBundle.order, createdOrderBundle.items)
-      : { delivered: false, fallback: null };
+
+    if (createdOrderBundle) {
+      Promise.resolve(notifyNewOrder(createdOrderBundle.order, createdOrderBundle.items)).catch(() => {});
+    }
 
     res.status(201).json({
       data: {
@@ -686,8 +687,8 @@ app.post("/api/orders/whatsapp", async (req, res) => {
         deliveryZoneName: delivery.zone.name,
         items: normalizedItems,
         customerNotification: {
-          channel: notificationResult.delivered ? "email" : "whatsapp_link",
-          fallback: notificationResult.fallback,
+          channel: "async",
+          fallback: null,
         },
       },
     });
@@ -760,9 +761,10 @@ app.post("/api/checkout/initialize", async (req, res) => {
     }
 
     const createdOrderBundle = await fetchOrderWithItems(orderResult.id);
-    const notificationResult = createdOrderBundle
-      ? await notifyNewOrder(createdOrderBundle.order, createdOrderBundle.items)
-      : { delivered: false, fallback: null };
+
+    if (createdOrderBundle) {
+      Promise.resolve(notifyNewOrder(createdOrderBundle.order, createdOrderBundle.items)).catch(() => {});
+    }
 
     if (!process.env.PAYSTACK_SECRET_KEY) {
       return res.status(500).json({ error: "PAYSTACK_SECRET_KEY missing" });
@@ -812,8 +814,8 @@ app.post("/api/checkout/initialize", async (req, res) => {
         grandTotal: delivery.grandTotal,
         authorization_url: data.data.authorization_url,
         customerNotification: {
-          channel: notificationResult.delivered ? "email" : "whatsapp_link",
-          fallback: notificationResult.fallback,
+          channel: "async",
+          fallback: null,
         },
       },
     });
@@ -947,7 +949,7 @@ app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
 
     const updated = await get("SELECT * FROM orders WHERE id = ?", [orderId]);
     const items = await all("SELECT * FROM order_items WHERE order_id = ?", [orderId]);
-    await notifyOrderStatusChanged(updated, existing.status, status);
+    Promise.resolve(notifyOrderStatusChanged(updated, existing.status, status)).catch(() => {});
     res.json({ data: { ...updated, items } });
   } catch {
     res.status(500).json({ error: "Failed to update order status" });
