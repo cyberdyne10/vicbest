@@ -79,6 +79,7 @@ form.addEventListener('submit', async (e) => {
   if (!deliveryQuote || !deliveryQuote.isCovered) return (errorBox.textContent = 'Selected delivery location is unavailable.');
 
   if (document.getElementById('save-info').checked) localStorage.setItem(PREFS_KEY, JSON.stringify({ ...customer }));
+  else localStorage.removeItem(PREFS_KEY);
 
   const endpoint = method === 'card' ? '/api/checkout/initialize' : '/api/orders/whatsapp';
 
@@ -112,6 +113,12 @@ form.addEventListener('submit', async (e) => {
       submitBtn.textContent = 'Complete Checkout';
     }
   }
+});
+
+document.querySelectorAll('input[name="checkoutMethod"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    submitBtn.textContent = radio.value === 'card' ? 'Proceed to Card Payment' : 'Complete Checkout';
+  });
 });
 
 init();

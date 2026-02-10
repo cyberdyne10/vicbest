@@ -39,7 +39,7 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 
 - Admin login (`/api/admin/login`)
 - Manage products (`/api/admin/products` CRUD)
-- View/update orders (`/api/admin/orders`, `/api/admin/orders/:id/status`)
+- View/update orders (`/api/admin/orders`, `/api/admin/orders/:id/status`) with quick status buttons + grouped status filters (`new`, `processing`, `delivered`, `cancelled`)
 - Order export now includes delivery location, subtotal, delivery fee, and grand total
 - View recent notification logs (`/api/admin/notifications/logs`) directly in admin UI
 
@@ -61,6 +61,9 @@ Create `.env` from `.env.example`:
 ```env
 PORT=3000
 BASE_URL=http://localhost:3000
+SQLITE_PATH=./data/vicbest.db
+SQLITE_BACKUP_DIR=./backups
+SQLITE_BACKUP_KEEP=14
 
 PAYSTACK_SECRET_KEY=sk_test_REPLACE
 PAYSTACK_PUBLIC_KEY=pk_test_REPLACE
@@ -128,7 +131,40 @@ INVENTORY_JOB_SECRET=replace_with_inventory_job_secret
 - `GET /api/admin/products/low-stock` — threshold-aware low-stock list for dashboard
 - `GET /api/admin/products/low-stock-summary` — current low-stock summary payload
 - `POST /api/admin/products/low-stock-summary/run` — manual run + admin email send
-- `POST /api/jobs/low-stock-summary/run?key=INVENTORY_JOB_SECRET` — cron/scheduler trigger route
+- `POST /api/jobs/low-stock-summary/run` — cron/scheduler trigger route (auth via `x-job-secret` header or `?key=`)
+
+### Cron automation (daily low-stock summary)
+
+1. Set `INVENTORY_JOB_SECRET` to a long random value.
+2. Use either:
+   - `npm run job:low-stock` (uses `BASE_URL` + `INVENTORY_JOB_SECRET` from env)
+   - direct HTTP call with `x-job-secret` header.
+
+Example (Linux cron):
+
+```bash
+0 8 * * * cd /path/to/vicbest && /usr/bin/env NODE_ENV=production npm run job:low-stock >> logs/low-stock-cron.log 2>&1
+```
+
+Optional OpenClaw cron sample:
+
+```bash
+# Run daily at 8:00am
+openclaw cron create --name vicbest-low-stock --schedule "0 8 * * *" --cwd "C:\Users\edimk\.openclaw\workspace\vicbest" --command "npm run job:low-stock"
+```
+
+### Production data safety (SQLite)
+
+- Run backups with: `npm run db:backup`
+  - Uses SQLite `VACUUM INTO` for a consistent snapshot.
+  - Keeps latest `SQLITE_BACKUP_KEEP` snapshots (default 14).
+- Startup safety checks now:
+  - logs active DB path on boot
+  - warns when `SQLITE_PATH` is missing in production
+  - warns when Render appears to use an ephemeral DB path
+- Render recommendation:
+  - mount a persistent disk and set `SQLITE_PATH=/var/data/vicbest.db`
+  - keep backups on persistent storage (`SQLITE_BACKUP_DIR=/var/data/backups`)
 
 ---
 
