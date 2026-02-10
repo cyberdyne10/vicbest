@@ -86,6 +86,7 @@ function customerFallbackPayload(order, items = []) {
     `Delivery: ${formatNgn(totals.deliveryFee)}`,
     `Grand Total: ${formatNgn(totals.grandTotal)}`,
     `Status: ${STATUS_LABELS[order.status] || order.status}`,
+    `Track: ${(process.env.BASE_URL || "http://localhost:3000")}/track/${order.payment_reference}`,
   ];
 
   const text = lines.join("\n");

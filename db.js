@@ -186,6 +186,69 @@ async function applyMigrations() {
         await run(`CREATE INDEX IF NOT EXISTS idx_orders_payment_reference ON orders(payment_reference)`);
       },
     },
+    {
+      name: "20260210_add_order_timeline_and_notes",
+      up: async () => {
+        if (!(await columnExists("orders", "internal_notes"))) {
+          await run(`ALTER TABLE orders ADD COLUMN internal_notes TEXT`);
+        }
+
+        await run(`CREATE TABLE IF NOT EXISTS order_timeline_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          order_id INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          message TEXT,
+          actor TEXT,
+          payload TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(order_id) REFERENCES orders(id)
+        )`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_order_timeline_order_id ON order_timeline_events(order_id, id DESC)`);
+      },
+    },
+    {
+      name: "20260210_add_coupon_and_discount_columns",
+      up: async () => {
+        await run(`CREATE TABLE IF NOT EXISTS coupons (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          code TEXT NOT NULL UNIQUE,
+          description TEXT,
+          discount_type TEXT NOT NULL,
+          discount_value INTEGER NOT NULL,
+          min_order_amount INTEGER,
+          max_discount_amount INTEGER,
+          starts_at DATETIME,
+          ends_at DATETIME,
+          usage_limit INTEGER,
+          used_count INTEGER NOT NULL DEFAULT 0,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        await run(`CREATE TABLE IF NOT EXISTS coupon_usages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          coupon_id INTEGER NOT NULL,
+          order_id INTEGER NOT NULL,
+          customer_email TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(coupon_id) REFERENCES coupons(id),
+          FOREIGN KEY(order_id) REFERENCES orders(id)
+        )`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_coupon_usages_coupon_id ON coupon_usages(coupon_id)`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_coupon_usages_order_id ON coupon_usages(order_id)`);
+
+        if (!(await columnExists("orders", "coupon_code"))) {
+          await run(`ALTER TABLE orders ADD COLUMN coupon_code TEXT`);
+        }
+        if (!(await columnExists("orders", "discount_amount"))) {
+          await run(`ALTER TABLE orders ADD COLUMN discount_amount INTEGER`);
+        }
+        if (!(await columnExists("orders", "coupon_id"))) {
+          await run(`ALTER TABLE orders ADD COLUMN coupon_id INTEGER REFERENCES coupons(id)`);
+        }
+      },
+    },
   ];
 
   for (const migration of migrations) {
@@ -296,7 +359,11 @@ async function initDb() {
     delivery_zone_name TEXT,
     subtotal_amount INTEGER,
     delivery_fee INTEGER,
+    discount_amount INTEGER,
+    coupon_code TEXT,
+    coupon_id INTEGER REFERENCES coupons(id),
     grand_total INTEGER,
+    internal_notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
@@ -343,6 +410,44 @@ async function initDb() {
     error_message TEXT,
     payload TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(order_id) REFERENCES orders(id)
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS order_timeline_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    message TEXT,
+    actor TEXT,
+    payload TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(order_id) REFERENCES orders(id)
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS coupons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    description TEXT,
+    discount_type TEXT NOT NULL,
+    discount_value INTEGER NOT NULL,
+    min_order_amount INTEGER,
+    max_discount_amount INTEGER,
+    starts_at DATETIME,
+    ends_at DATETIME,
+    usage_limit INTEGER,
+    used_count INTEGER NOT NULL DEFAULT 0,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS coupon_usages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    coupon_id INTEGER NOT NULL,
+    order_id INTEGER NOT NULL,
+    customer_email TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(coupon_id) REFERENCES coupons(id),
     FOREIGN KEY(order_id) REFERENCES orders(id)
   )`);
 
