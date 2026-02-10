@@ -690,6 +690,51 @@ app.post("/api/admin/uploads/product-image", requireAdmin, rateLimit({ windowMs:
   }
 });
 
+app.get("/api/home/highlights", async (_, res) => {
+  try {
+    const [allProducts, topDeals, recentlyAdded, popularRows, deliveredCount] = await Promise.all([
+      all("SELECT * FROM products ORDER BY id"),
+      all("SELECT * FROM products WHERE in_stock = 1 ORDER BY price ASC LIMIT 6"),
+      all("SELECT * FROM products ORDER BY created_at DESC, id DESC LIMIT 6"),
+      all(
+        `SELECT p.*, COALESCE(SUM(oi.quantity), 0) AS order_qty
+         FROM products p
+         LEFT JOIN order_items oi ON oi.product_id = p.id
+         LEFT JOIN orders o ON o.id = oi.order_id
+         AND o.status IN ('paid','processing','delivered')
+         AND datetime(o.created_at) >= datetime('now', '-7 day')
+         GROUP BY p.id
+         ORDER BY order_qty DESC, p.id DESC
+         LIMIT 6`
+      ),
+      get("SELECT COUNT(*) AS total FROM orders WHERE status = 'delivered'"),
+    ]);
+
+    const popularThisWeek = popularRows.filter((row) => Number(row.order_qty || 0) > 0);
+    const fallbackPopular = allProducts.filter((p) => Number(p.in_stock) === 1).slice(0, 6);
+
+    res.json({
+      data: {
+        featured: {
+          topDeals: formatProducts(topDeals),
+          recentlyAdded: formatProducts(recentlyAdded),
+          popularThisWeek: formatProducts(popularThisWeek.length ? popularThisWeek : fallbackPopular),
+        },
+        socialProof: {
+          ordersDelivered: Number(deliveredCount?.total || 0),
+          testimonials: [
+            { quote: "“Very transparent process and smooth delivery.”", by: "Chika, Lagos" },
+            { quote: "“Got my groceries same day. Fresh and neatly packed.”", by: "Tunde, Ikeja" },
+            { quote: "“The car condition matched exactly what was posted.”", by: "Ada, Abuja" },
+          ],
+        },
+      },
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch homepage highlights" });
+  }
+});
+
 app.get("/api/products", async (req, res) => {
   try {
     const category = safeText(req.query.category, 30);

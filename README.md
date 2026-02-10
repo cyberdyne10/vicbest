@@ -15,6 +15,8 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 ### Storefront + Checkout
 
 - Product catalog (`/api/products`) with seeded cars and groceries
+- Enhanced homepage UX: hero dual CTAs, product trust cues, quantity stepper + quick buy, featured rails, social proof, and sticky mobile cart bar
+- Homepage highlights endpoint (`GET /api/home/highlights`) for top deals, recently added, popular-this-week, and delivered-order indicator with fallback
 - Cart in browser + optional server sync (`/api/cart/sync`)
 - Checkout (`/checkout`) with location-based delivery fees + Paystack initialization
 - Delivery zone config seeded in SQLite (`delivery_zones`) with defaults: Lagos Mainland, Lagos Island, Abuja, Outside Coverage
