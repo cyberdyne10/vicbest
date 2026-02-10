@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "job:low-stock": "node scripts/run-low-stock-summary.js",
+    "db:backup": "node scripts/backup-sqlite.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
