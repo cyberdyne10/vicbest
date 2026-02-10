@@ -20,6 +20,9 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 - Delivery zone config seeded in SQLite (`delivery_zones`) with defaults: Lagos Mainland, Lagos Island, Abuja, Outside Coverage
 - Delivery quote endpoints: `GET /api/delivery/zones`, `POST /api/delivery/calculate`
 - Payment verification (`/api/paystack/verify/:reference`) + webhook (`/api/paystack/webhook`)
+- Automated notifications on new orders (customer + admin) with graceful fallback when SMTP is not configured
+- Automated customer status-update notifications for `processing`, `delivered`, and `cancelled`
+- Notification event logs stored in SQLite (`notification_logs`) and visible in admin UI
 
 ### User Accounts (Phase 3)
 
@@ -36,6 +39,7 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 - Manage products (`/api/admin/products` CRUD)
 - View/update orders (`/api/admin/orders`, `/api/admin/orders/:id/status`)
 - Order export now includes delivery location, subtotal, delivery fee, and grand total
+- View recent notification logs (`/api/admin/notifications/logs`) directly in admin UI
 
 ---
 
@@ -64,9 +68,21 @@ ADMIN_PASSWORD=replace_with_strong_password
 ADMIN_TOKEN_SECRET=replace_with_long_random_string
 
 USER_TOKEN_SECRET=replace_with_another_long_random_string
+
+# Notifications
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=notifications@example.com
+SMTP_PASS=replace_with_smtp_password
+SMTP_FROM="Vicbest Store <notifications@example.com>"
+ADMIN_NOTIFICATION_EMAILS=owner@example.com,ops@example.com
+STORE_WHATSAPP_NUMBER=2348091747685
 ```
 
 > Never commit real secrets.
+>
+> If SMTP vars are missing, the app does **not** crash. It records notification attempts in `notification_logs` and returns a WhatsApp message-link fallback payload for customer confirmations.
 
 ---
 
