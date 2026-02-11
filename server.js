@@ -103,6 +103,40 @@ function parseCartItems(items, productMap) {
   return { subtotalAmount, normalizedItems };
 }
 
+function parseProductIdsFromInput(rawValue) {
+  const fromArray = Array.isArray(rawValue)
+    ? rawValue
+    : String(rawValue || "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+
+  return [...new Set(fromArray.map((x) => Number(x)).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 20);
+}
+
+function pickRecommendations(allProducts, seedProducts = [], limit = 6) {
+  const seeds = seedProducts.filter(Boolean);
+  const ids = new Set(seeds.map((p) => p.id));
+  const categories = new Set(seeds.map((p) => p.category).filter(Boolean));
+
+  const scored = allProducts
+    .filter((p) => !ids.has(p.id) && Number(p.in_stock) === 1)
+    .map((p) => {
+      let score = 0;
+      if (categories.has(p.category)) score += 10;
+      const nearest = seeds.length
+        ? Math.min(...seeds.map((seed) => Math.abs(Number(seed.price || 0) - Number(p.price || 0))))
+        : Number(p.price || 0);
+      score += Math.max(0, 8 - Math.floor(nearest / 2000000));
+      score += Math.max(0, 4 - Math.floor(Number(p.stock_quantity || 0) / 5));
+      return { ...p, _score: score };
+    })
+    .sort((a, b) => b._score - a._score || a.price - b.price || b.id - a.id)
+    .slice(0, limit);
+
+  return scored.map(({ _score, ...rest }) => rest);
+}
+
 function parseCsvRows(raw = "") {
   const text = String(raw || "").replace(/^\uFEFF/, "");
   const rows = [];
@@ -732,6 +766,138 @@ app.get("/api/home/highlights", async (_, res) => {
     });
   } catch {
     res.status(500).json({ error: "Failed to fetch homepage highlights" });
+  }
+});
+
+app.get("/api/home/flash-deals", async (_, res) => {
+  try {
+    const rows = await all(
+      `SELECT * FROM products
+       WHERE in_stock = 1
+       ORDER BY price ASC, stock_quantity ASC, id DESC
+       LIMIT 6`
+    );
+
+    const endsAt = new Date(Date.now() + 1000 * 60 * 60 * 6).toISOString();
+    res.json({ data: { endsAt, products: formatProducts(rows) } });
+  } catch {
+    res.status(500).json({ error: "Failed to load flash deals" });
+  }
+});
+
+app.get("/api/recommendations", async (req, res) => {
+  try {
+    const productIds = parseProductIdsFromInput(req.query.productIds);
+    const allProducts = await all("SELECT * FROM products ORDER BY id DESC");
+    let seeds = [];
+
+    if (productIds.length) {
+      const placeholders = productIds.map(() => "?").join(",");
+      seeds = await all(`SELECT * FROM products WHERE id IN (${placeholders})`, productIds);
+    }
+
+    if (!seeds.length && req.user) {
+      seeds = await all(
+        `SELECT p.*
+         FROM user_recently_viewed rv
+         JOIN products p ON p.id = rv.product_id
+         WHERE rv.user_id = ?
+         ORDER BY rv.viewed_at DESC
+         LIMIT 6`,
+        [req.user.id]
+      );
+    }
+
+    const picks = pickRecommendations(allProducts, seeds, 6);
+    res.json({ data: formatProducts(picks) });
+  } catch {
+    res.status(500).json({ error: "Failed to load recommendations" });
+  }
+});
+
+app.get("/api/me/wishlist", requireUser, async (req, res) => {
+  try {
+    const rows = await all(
+      `SELECT p.*
+       FROM wishlists w
+       JOIN products p ON p.id = w.product_id
+       WHERE w.user_id = ?
+       ORDER BY w.created_at DESC`,
+      [req.user.id]
+    );
+    res.json({ data: formatProducts(rows) });
+  } catch {
+    res.status(500).json({ error: "Failed to load wishlist" });
+  }
+});
+
+app.post("/api/me/wishlist", requireUser, async (req, res) => {
+  try {
+    const productId = Number(req.body?.productId);
+    if (!Number.isInteger(productId) || productId <= 0) return res.status(400).json({ error: "Invalid productId" });
+
+    const exists = await get("SELECT id FROM wishlists WHERE user_id = ? AND product_id = ?", [req.user.id, productId]);
+    if (exists) {
+      await run("DELETE FROM wishlists WHERE user_id = ? AND product_id = ?", [req.user.id, productId]);
+      return res.json({ data: { productId, wished: false } });
+    }
+
+    await run(
+      `INSERT INTO wishlists (user_id, product_id, created_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id, product_id) DO NOTHING`,
+      [req.user.id, productId]
+    );
+
+    return res.status(201).json({ data: { productId, wished: true } });
+  } catch {
+    return res.status(500).json({ error: "Failed to update wishlist" });
+  }
+});
+
+app.get("/api/me/recently-viewed", requireUser, async (req, res) => {
+  try {
+    const rows = await all(
+      `SELECT p.*
+       FROM user_recently_viewed rv
+       JOIN products p ON p.id = rv.product_id
+       WHERE rv.user_id = ?
+       ORDER BY rv.viewed_at DESC
+       LIMIT 12`,
+      [req.user.id]
+    );
+    res.json({ data: formatProducts(rows) });
+  } catch {
+    res.status(500).json({ error: "Failed to load recently viewed" });
+  }
+});
+
+app.post("/api/me/recently-viewed", requireUser, async (req, res) => {
+  try {
+    const productId = Number(req.body?.productId);
+    if (!Number.isInteger(productId) || productId <= 0) return res.status(400).json({ error: "Invalid productId" });
+
+    await run(
+      `INSERT INTO user_recently_viewed (user_id, product_id, viewed_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id, product_id) DO UPDATE SET viewed_at = CURRENT_TIMESTAMP`,
+      [req.user.id, productId]
+    );
+
+    const overflow = await all(
+      `SELECT id FROM user_recently_viewed
+       WHERE user_id = ?
+       ORDER BY viewed_at DESC
+       LIMIT -1 OFFSET 20`,
+      [req.user.id]
+    );
+    for (const row of overflow) {
+      await run("DELETE FROM user_recently_viewed WHERE id = ?", [row.id]);
+    }
+
+    res.status(201).json({ ok: true });
+  } catch {
+    res.status(500).json({ error: "Failed to save recently viewed" });
   }
 });
 

@@ -15,8 +15,15 @@ Vicbest Store is a full-stack ecommerce app with storefront/checkout, admin dash
 ### Storefront + Checkout
 
 - Product catalog (`/api/products`) with seeded cars and groceries
-- Enhanced homepage UX: hero dual CTAs, product trust cues, quantity stepper + quick buy, featured rails, social proof, and sticky mobile cart bar
+- Enhanced homepage UX: hero dual CTAs, product trust cues, quantity stepper + quick buy, featured rails, social proof, sticky mobile cart bar, and floating WhatsApp help button
 - Homepage highlights endpoint (`GET /api/home/highlights`) for top deals, recently added, popular-this-week, and delivered-order indicator with fallback
+- Recently viewed rail + “Continue shopping” shortcut
+- Smart recommendations rail (`GET /api/recommendations`) using simple cart/category + price-nearness heuristic
+- Flash deals module (`GET /api/home/flash-deals`) with live countdown timer
+- Wishlist/favorites for guests (localStorage) and logged users (`GET/POST /api/me/wishlist`)
+- Compare Cars module (up to 3 vehicles side-by-side)
+- Delivery ETA preview by location on storefront
+- Exit-intent offer banner with quick coupon copy
 - Cart in browser + optional server sync (`/api/cart/sync`)
 - Checkout (`/checkout`) with location-based delivery fees + Paystack initialization
 - Delivery zone config seeded in SQLite (`delivery_zones`) with defaults: Lagos Mainland, Lagos Island, Abuja, Outside Coverage
@@ -132,6 +139,15 @@ INVENTORY_JOB_SECRET=replace_with_inventory_job_secret
 ### My orders (protected)
 
 `GET /api/orders/me`
+
+### Customer personalization endpoints
+
+- `GET /api/home/flash-deals` — current flash deal products + `endsAt`
+- `GET /api/recommendations?productIds=1,2,3` — recommendation list (uses provided products or user recently viewed when logged in)
+- `GET /api/me/wishlist` (auth required)
+- `POST /api/me/wishlist` (auth required) with body `{ "productId": 1 }` toggles favorite on/off
+- `GET /api/me/recently-viewed` (auth required)
+- `POST /api/me/recently-viewed` (auth required) with body `{ "productId": 1 }`
 
 ### Product image uploads (admin)
 

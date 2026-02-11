@@ -249,6 +249,32 @@ async function applyMigrations() {
         }
       },
     },
+    {
+      name: "20260211_add_wishlist_and_recent_views",
+      up: async () => {
+        await run(`CREATE TABLE IF NOT EXISTS wishlists (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          product_id INTEGER NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, product_id),
+          FOREIGN KEY(user_id) REFERENCES users(id),
+          FOREIGN KEY(product_id) REFERENCES products(id)
+        )`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_wishlists_user_id ON wishlists(user_id, created_at DESC)`);
+
+        await run(`CREATE TABLE IF NOT EXISTS user_recently_viewed (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          product_id INTEGER NOT NULL,
+          viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, product_id),
+          FOREIGN KEY(user_id) REFERENCES users(id),
+          FOREIGN KEY(product_id) REFERENCES products(id)
+        )`);
+        await run(`CREATE INDEX IF NOT EXISTS idx_recently_viewed_user_id ON user_recently_viewed(user_id, viewed_at DESC)`);
+      },
+    },
   ];
 
   for (const migration of migrations) {
@@ -449,6 +475,26 @@ async function initDb() {
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(coupon_id) REFERENCES coupons(id),
     FOREIGN KEY(order_id) REFERENCES orders(id)
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS wishlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, product_id),
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(product_id) REFERENCES products(id)
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS user_recently_viewed (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, product_id),
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(product_id) REFERENCES products(id)
   )`);
 
   await applyMigrations();
