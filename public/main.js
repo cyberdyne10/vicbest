@@ -163,7 +163,7 @@ function saveCart() {
 }
 
 function setItemQuantity(productId, quantity) { const q = clampQty(quantity); const ex = cart.find((i) => i.productId === productId); if (ex) ex.quantity = q; else cart.push({ productId, quantity: q }); saveCart(); renderCart(); }
-function addToCart(productId, quantity = 1) { const q = clampQty(quantity); const ex = cart.find((i) => i.productId === productId); if (ex) ex.quantity += q; else cart.push({ productId, quantity: q }); saveCart(); renderCart(); renderRecommendations(); }
+function addToCart(productId, quantity = 1) { const q = clampQty(quantity); const ex = cart.find((i) => i.productId === productId); if (ex) ex.quantity += q; else cart.push({ productId, quantity: q }); saveCart(); renderCart(); renderRecommendations(); trackEvent('add_to_cart', { productId, quantity: q }); }
 function removeItem(productId) { cart = cart.filter((i) => i.productId !== productId); saveCart(); renderCart(); renderRecommendations(); }
 function getQuantityFor(productId) { return clampQty(document.querySelector(`[data-qty-input="${productId}"]`)?.value || 1); }
 
@@ -256,6 +256,57 @@ function initExitIntent() {
   });
 }
 
+async function trackEvent(eventType, payload = {}) {
+  await fetch('/api/analytics/event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ eventType, sessionId, payload }),
+  }).catch(() => {});
+}
+
+function initAssistantWidget() {
+  const input = document.getElementById('assistant-input');
+  const send = document.getElementById('assistant-send');
+  const messages = document.getElementById('assistant-messages');
+  const toggle = document.getElementById('assistant-toggle');
+  const body = document.getElementById('assistant-body');
+  if (!input || !send || !messages) return;
+
+  const append = (txt, mine = false) => {
+    const p = document.createElement('p');
+    p.className = mine ? 'text-right text-blue-900' : 'text-gray-700';
+    p.textContent = txt;
+    messages.appendChild(p);
+    messages.scrollTop = messages.scrollHeight;
+  };
+
+  send.addEventListener('click', async () => {
+    const q = input.value.trim();
+    if (!q) return;
+    append(q, true);
+    input.value = '';
+    const res = await fetch('/api/assistant/recommend', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q }) }).catch(() => null);
+    const data = await res?.json().catch(() => ({}));
+    const reply = data?.data?.responseText || 'Sorry, I could not process that.';
+    append(reply);
+    const picks = data?.data?.products || [];
+    if (picks.length) append(`Try: ${picks.map((p) => p.name).join(', ')}`);
+  });
+
+  toggle?.addEventListener('click', () => {
+    body.classList.toggle('hidden');
+    toggle.textContent = body.classList.contains('hidden') ? 'Show' : 'Hide';
+  });
+}
+
+function initPwa() {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    });
+  }
+}
+
 function initUI() {
   document.getElementById('open-cart-btn')?.addEventListener('click', openCart);
   document.getElementById('open-cart-btn-mobile')?.addEventListener('click', openCart);
@@ -272,14 +323,27 @@ function initUI() {
 }
 
 (async function boot() {
+  const restoreToken = new URLSearchParams(window.location.search).get('restore');
+  if (restoreToken) {
+    const res = await fetch(`/api/cart/restore/${encodeURIComponent(restoreToken)}`).catch(() => null);
+    const data = await res?.json().catch(() => ({}));
+    if (Array.isArray(data?.data?.cart) && data.data.cart.length) {
+      cart = data.data.cart;
+      persistState();
+    }
+  }
+
   await restoreCart();
   user = await getCurrentUser();
   await loadWishlistAndRecentForUser();
   initUI();
+  initAssistantWidget();
+  initPwa();
   await fetchProducts();
   await fetchHomeHighlights();
   await fetchFlashDeals();
   await initDeliveryEta();
   initExitIntent();
   startFlashCountdown();
+  trackEvent('view_home', { path: location.pathname });
 })();

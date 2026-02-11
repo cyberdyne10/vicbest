@@ -293,7 +293,7 @@ async function bootstrap() {
   activeOrderFilter = ORDER_FILTERS.includes($('order-filter').value) ? $('order-filter').value : '';
   $('order-filter').value = activeOrderFilter;
   syncOrderFilterButtons();
-  await Promise.all([fetchMetrics(), fetchLowStock(), fetchProducts(), fetchOrders(), fetchNotificationLogs(), fetchLowStockSummary(), fetchCoupons()]);
+  await Promise.all([fetchMetrics(), fetchLowStock(), fetchProducts(), fetchOrders(), fetchNotificationLogs(), fetchLowStockSummary(), fetchCoupons(), fetchPromoRules(), fetchAuditLogs()]);
   $('export-csv').onclick = (e) => {
     e.preventDefault();
     window.open(`/api/admin/orders/export.csv?token=${encodeURIComponent(token)}`, '_blank');
@@ -423,8 +423,49 @@ document.querySelectorAll('.order-filter-btn').forEach((btn) => btn.onclick = as
   syncOrderFilterButtons();
   await fetchOrders();
 });
+async function fetchPromoRules() {
+  const r = await fetch('/api/admin/promos', { headers: authHeaders() }).catch(() => null);
+  const d = await r?.json().catch(() => ({}));
+  const host = $('promos-wrap');
+  if (!host) return;
+  const rows = d?.data || [];
+  host.innerHTML = rows.length ? rows.map((p) => `<div class="border rounded-lg p-2"><strong>${p.name}</strong> <span class="text-gray-500">(${p.rule_type})</span><br/><span>${p.is_active ? 'Active' : 'Inactive'}</span> <button data-promo-toggle="${p.id}" data-next="${p.is_active ? 0 : 1}" class="ml-2 underline">${p.is_active ? 'Deactivate' : 'Activate'}</button></div>`).join('') : '<p class="text-gray-500">No promo rules yet.</p>';
+  document.querySelectorAll('[data-promo-toggle]').forEach((btn) => btn.onclick = async () => {
+    await fetch(`/api/admin/promos/${btn.dataset.promoToggle}/toggle`, { method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ is_active: Number(btn.dataset.next) === 1 }) });
+    await fetchPromoRules();
+  });
+}
+
+async function savePromoRule(e) {
+  e.preventDefault();
+  await fetch('/api/admin/promos', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      name: $('promo-name')?.value || '',
+      rule_type: $('promo-rule-type')?.value || 'discount',
+      discount_type: $('promo-discount-type')?.value || 'fixed',
+      discount_value: Number($('promo-value')?.value || 0),
+      min_cart_amount: Number($('promo-min-cart')?.value || 0),
+      is_active: true,
+    }),
+  }).catch(() => null);
+  if ($('promo-form')) $('promo-form').reset();
+  await fetchPromoRules();
+}
+
+async function fetchAuditLogs() {
+  const r = await fetch('/api/admin/audit-logs?limit=60', { headers: authHeaders() }).catch(() => null);
+  const d = await r?.json().catch(() => ({}));
+  const host = $('audit-logs-wrap');
+  if (!host) return;
+  const rows = d?.data || [];
+  host.innerHTML = rows.length ? rows.map((x) => `<div class="border-b py-2"><p><strong>${x.action}</strong> • ${x.actor_role || x.actor_type}</p><p class="text-gray-500">${x.entity_type || '-'} #${x.entity_id || '-'}</p><p class="text-gray-400">${x.created_at || ''}</p></div>`).join('') : '<p class="text-gray-500">No audit logs yet.</p>';
+}
+
 $('run-csv-upload').onclick = runCsvUpload;
 $('coupon-form').onsubmit = saveCoupon;
+$('promo-form').onsubmit = savePromoRule;
 
 $('logout-btn').onclick = () => {
   token = '';

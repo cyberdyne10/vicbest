@@ -171,6 +171,30 @@
           <tbody id="notification-logs-tbody"></tbody>
         </table>
       </div>
+
+      <div class="grid md:grid-cols-2 gap-5">
+        <div class="bg-white border rounded-2xl p-5">
+          <h3 class="text-lg font-bold mb-3">Promo Rules</h3>
+          <form id="promo-form" class="space-y-2">
+            <input id="promo-name" class="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Promo name" />
+            <div class="grid grid-cols-2 gap-2">
+              <select id="promo-rule-type" class="border rounded-lg px-3 py-2 text-sm"><option value="discount">Discount</option><option value="bogo">BOGO</option></select>
+              <select id="promo-discount-type" class="border rounded-lg px-3 py-2 text-sm"><option value="fixed">Fixed</option><option value="percent">Percent</option></select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <input id="promo-value" type="number" min="0" class="border rounded-lg px-3 py-2 text-sm" placeholder="Discount value" />
+              <input id="promo-min-cart" type="number" min="0" class="border rounded-lg px-3 py-2 text-sm" placeholder="Min cart" />
+            </div>
+            <button class="w-full bg-blue-900 text-white py-2 rounded-lg text-sm">Create Promo</button>
+          </form>
+          <div id="promos-wrap" class="space-y-2 mt-3 text-xs"></div>
+        </div>
+
+        <div class="bg-white border rounded-2xl p-5">
+          <h3 class="text-lg font-bold mb-3">Audit Logs</h3>
+          <div id="audit-logs-wrap" class="text-xs max-h-72 overflow-auto"></div>
+        </div>
+      </div>
     </section>
   </main>
 
