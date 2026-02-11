@@ -221,6 +221,21 @@ openclaw cron create --name vicbest-low-stock --schedule "0 8 * * *" --cwd "C:\U
 ## Deployment guide
 
 - Render go-live checklist: `docs/RENDER-GO-LIVE.md`
+- Advanced features setup + limits: `docs/ADVANCED-FEATURES.md`
+
+## Advanced Suite Summary
+
+This build now includes:
+- AI storefront assistant widget + recommendation endpoint
+- Promo rule engine with admin controls and checkout integration
+- Abandoned-cart recovery tokens and job endpoint
+- Role-based admin (`super_admin`, `manager`, `inventory_staff`) + audit logs
+- Advanced analytics endpoints (funnel/top products/repeat buyers/location)
+- Customer addresses, reorder endpoint, loyalty ledger basics
+- Returns/refund workflow with timeline and admin review actions
+- PWA manifest + service worker + offline fallback page
+- Fraud risk scoring + manual review queue
+- Multi-location inventory model and admin stock-by-location endpoint
 
 ## Quick test checklist
 
