@@ -301,7 +301,8 @@ function initUI() {
   await restoreCart();
   user = await getCurrentUser();
   await loadWishlistAndRecentForUser();
-  initUI();`r`n  initPwa();
+  initUI();
+  initPwa();
   await fetchProducts();
   await fetchHomeHighlights();
   await fetchFlashDeals();
@@ -310,3 +311,4 @@ function initUI() {
   startFlashCountdown();
   trackEvent('view_home', { path: location.pathname });
 })();
+
