@@ -6,6 +6,7 @@ const express = require("express");
 const path = require("path");
 const { initDb, all, get, run, dbPath, getStartupWarnings } = require("./db");
 const { notifyNewOrder, notifyOrderStatusChanged, notifyAdminLowStockSummary } = require("./notifications");
+const { ensureAdvancedSchema, buildDeterministicAssistantReply, makeRestoreToken } = require("./advanced");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -89,11 +90,13 @@ function parseCartItems(items, productMap) {
     const product = productMap.get(Number(item.productId));
     const quantity = Number(item.quantity) || 1;
     if (!product || quantity <= 0) continue;
+    if (Number(product.stock_quantity || 0) < quantity) continue;
     const lineTotal = product.price * quantity;
     subtotalAmount += lineTotal;
     normalizedItems.push({
       productId: product.id,
       productName: product.name,
+      category: product.category,
       quantity,
       unitPrice: product.price,
       lineTotal,
@@ -547,6 +550,106 @@ function buildAdminOrderFilters(rawStatusFilter, rawSearch) {
   return { statuses, search };
 }
 
+function roleRank(role = "") {
+  const map = { inventory_staff: 1, manager: 2, super_admin: 3, admin: 3 };
+  return map[role] || 0;
+}
+
+function requireAdminRole(minRole = "manager") {
+  return (req, res, next) => {
+    if (!req.admin) return res.status(401).json({ error: "Unauthorized" });
+    if (roleRank(req.admin.role) < roleRank(minRole)) return res.status(403).json({ error: "Insufficient role" });
+    next();
+  };
+}
+
+async function writeAuditLog(req, action, entityType, entityId, metadata = {}) {
+  try {
+    await run(
+      `INSERT INTO audit_logs (actor_type, actor_id, actor_role, action, entity_type, entity_id, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [req.admin ? "admin" : "system", String(req.admin?.id || "system"), String(req.admin?.role || "system"), action, entityType, String(entityId || ""), JSON.stringify(metadata || {})]
+    );
+  } catch {}
+}
+
+async function applyPromoRules({ items, subtotalAmount }) {
+  const nowIso = new Date().toISOString();
+  const rules = await all(
+    `SELECT * FROM promo_rules
+     WHERE is_active = 1
+     AND (starts_at IS NULL OR starts_at <= ?)
+     AND (ends_at IS NULL OR ends_at >= ?)
+     ORDER BY id DESC`,
+    [nowIso, nowIso]
+  );
+
+  const breakdown = [];
+  let promoDiscount = 0;
+  const appliedRuleIds = [];
+
+  for (const rule of rules) {
+    const minCart = Number(rule.min_cart_amount || 0);
+    if (subtotalAmount < minCart) continue;
+
+    const categoryMatch = rule.category
+      ? items.some((i) => normalizeCategory(i.category || "") === normalizeCategory(rule.category || ""))
+      : true;
+    if (!categoryMatch) continue;
+
+    let thisDiscount = 0;
+    if (rule.rule_type === "discount") {
+      if (rule.discount_type === "fixed") thisDiscount = Number(rule.discount_value || 0);
+      if (rule.discount_type === "percent") thisDiscount = Math.floor((subtotalAmount * Number(rule.discount_value || 0)) / 100);
+    }
+
+    if (rule.rule_type === "bogo" && Number(rule.bogo_product_id) > 0) {
+      const item = items.find((i) => Number(i.productId) === Number(rule.bogo_product_id));
+      if (item) {
+        const buyQty = Math.max(1, Number(rule.bogo_buy_qty || 1));
+        const getQty = Math.max(1, Number(rule.bogo_get_qty || 1));
+        const freeUnits = Math.floor(item.quantity / buyQty) * getQty;
+        thisDiscount = freeUnits * Number(item.unitPrice || 0);
+      }
+    }
+
+    thisDiscount = Math.max(0, Math.min(thisDiscount, subtotalAmount - promoDiscount));
+    if (thisDiscount > 0) {
+      promoDiscount += thisDiscount;
+      appliedRuleIds.push(rule.id);
+      breakdown.push({ ruleId: rule.id, name: rule.name, discountAmount: thisDiscount, type: rule.rule_type });
+    }
+  }
+
+  return { promoDiscount, appliedRuleIds, breakdown };
+}
+
+function computeRiskScore({ customerEmail, customerPhone, amount, isGuest }) {
+  let score = 0;
+  const flags = [];
+  if (isGuest) {
+    score += 20;
+    flags.push("guest_checkout");
+  }
+  if (!String(customerPhone || "").trim()) {
+    score += 15;
+    flags.push("missing_phone");
+  }
+  if (Number(amount || 0) > Number(process.env.FRAUD_HIGH_AMOUNT || 1500000)) {
+    score += 35;
+    flags.push("high_amount");
+  }
+  if (!String(customerEmail || "").includes("@")) {
+    score += 20;
+    flags.push("suspicious_email");
+  }
+
+  const reviewThreshold = Number(process.env.FRAUD_REVIEW_THRESHOLD || 45);
+  const riskLevel = score >= 70 ? "high" : score >= reviewThreshold ? "medium" : "low";
+  const manualReviewStatus = riskLevel === "high" || riskLevel === "medium" ? "queued" : "clear";
+  return { score, riskLevel, flags, manualReviewStatus };
+}
+
 app.use(attachUser);
 
 app.get("/api/health", (_, res) => res.json({ ok: true }));
@@ -673,19 +776,29 @@ app.get("/api/orders/me", requireUser, async (req, res) => {
   }
 });
 
-app.post("/api/admin/login", rateLimit({ windowMs: 60_000, maxRequests: 12 }), (req, res) => {
-  const configuredPassword = process.env.ADMIN_PASSWORD;
-  if (!configuredPassword) {
-    return res.status(500).json({ error: "ADMIN_PASSWORD is not configured" });
-  }
+app.post("/api/admin/login", rateLimit({ windowMs: 60_000, maxRequests: 12 }), async (req, res) => {
+  try {
+    const email = normalizeEmail(safeText(req.body?.email, 160));
+    const password = String(req.body?.password || "");
 
-  const password = String(req.body?.password || "");
-  if (!password || password !== configuredPassword) {
-    return res.status(401).json({ error: "Invalid credentials" });
-  }
+    if (email) {
+      const admin = await get("SELECT * FROM admin_users WHERE email = ? AND is_active = 1", [email]);
+      if (!admin) return res.status(401).json({ error: "Invalid credentials" });
+      const ok = await bcrypt.compare(password, admin.password_hash);
+      if (!ok) return res.status(401).json({ error: "Invalid credentials" });
+      const token = signAdminToken({ id: admin.id, role: admin.role || "manager", exp: Date.now() + 12 * 60 * 60 * 1000 });
+      return res.json({ token, expiresInHours: 12, role: admin.role || "manager" });
+    }
 
-  const token = signAdminToken({ role: "admin", exp: Date.now() + 12 * 60 * 60 * 1000 });
-  res.json({ token, expiresInHours: 12 });
+    const configuredPassword = process.env.ADMIN_PASSWORD;
+    if (!configuredPassword) return res.status(500).json({ error: "ADMIN_PASSWORD is not configured" });
+    if (!password || password !== configuredPassword) return res.status(401).json({ error: "Invalid credentials" });
+
+    const token = signAdminToken({ id: "legacy", role: "super_admin", exp: Date.now() + 12 * 60 * 60 * 1000 });
+    return res.json({ token, expiresInHours: 12, role: "super_admin" });
+  } catch {
+    return res.status(500).json({ error: "Admin login failed" });
+  }
 });
 
 app.post("/api/admin/uploads/product-image", requireAdmin, rateLimit({ windowMs: 60_000, maxRequests: 20 }), async (req, res) => {
@@ -975,6 +1088,7 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
     );
 
     const row = await get("SELECT * FROM products WHERE id = ?", [result.id]);
+    await writeAuditLog(req, "product.create", "product", result.id, { name: row?.name, category: row?.category });
     res.status(201).json({ data: formatProducts([row])[0] });
   } catch {
     res.status(500).json({ error: "Failed to create product" });
@@ -1121,6 +1235,7 @@ app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
     );
 
     const row = await get("SELECT * FROM products WHERE id = ?", [productId]);
+    await writeAuditLog(req, "product.update", "product", productId, { name: row?.name, category: row?.category });
     res.json({ data: formatProducts([row])[0] });
   } catch {
     res.status(500).json({ error: "Failed to update product" });
@@ -1134,6 +1249,7 @@ app.delete("/api/admin/products/:id", requireAdmin, async (req, res) => {
 
     const result = await run("DELETE FROM products WHERE id = ?", [productId]);
     if (result.changes === 0) return res.status(404).json({ error: "Product not found" });
+    await writeAuditLog(req, "product.delete", "product", productId, {});
     res.json({ ok: true });
   } catch {
     res.status(500).json({ error: "Failed to delete product" });
@@ -1219,11 +1335,14 @@ app.post("/api/cart/sync", async (req, res) => {
       return res.status(400).json({ error: "sessionId and cart[] are required" });
     }
     const payload = JSON.stringify(cart.slice(0, 200));
+    const customerEmail = normalizeEmail(safeText(req.body?.customer?.email, MAX_INPUT_LENGTH.email));
+    const customerPhone = safeText(req.body?.customer?.phone, MAX_INPUT_LENGTH.phone);
+    const restoreToken = makeRestoreToken();
     await run(
-      `INSERT INTO cart_snapshots (session_id, payload, updated_at)
-       VALUES (?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(session_id) DO UPDATE SET payload=excluded.payload, updated_at=CURRENT_TIMESTAMP`,
-      [sessionId, payload]
+      `INSERT INTO cart_snapshots (session_id, payload, customer_email, customer_phone, restore_token, updated_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(session_id) DO UPDATE SET payload=excluded.payload, customer_email=COALESCE(excluded.customer_email, cart_snapshots.customer_email), customer_phone=COALESCE(excluded.customer_phone, cart_snapshots.customer_phone), restore_token=COALESCE(cart_snapshots.restore_token, excluded.restore_token), updated_at=CURRENT_TIMESTAMP`,
+      [sessionId, payload, customerEmail || null, customerPhone || null, restoreToken]
     );
     res.json({ ok: true });
   } catch {
@@ -1266,7 +1385,7 @@ app.post("/api/orders/whatsapp", async (req, res) => {
     if (productIds.length === 0) return res.status(400).json({ error: "No valid cart items" });
 
     const products = await all(
-      `SELECT id, name, price FROM products WHERE id IN (${productIds.map(() => "?").join(",")})`,
+      `SELECT id, name, category, price, stock_quantity FROM products WHERE id IN (${productIds.map(() => "?").join(",")})`,
       productIds
     );
     const productMap = new Map(products.map((p) => [p.id, p]));
@@ -1281,13 +1400,6 @@ app.post("/api/orders/whatsapp", async (req, res) => {
     );
     if (!couponResult.valid) return res.status(400).json({ error: couponResult.error });
 
-    const discountedSubtotal = Math.max(0, subtotalAmount - Number(couponResult.discountAmount || 0));
-    const delivery = await calculateDelivery({
-      deliveryZoneCode: customer.deliveryZoneCode,
-      cartSubtotal: discountedSubtotal,
-    });
-    if (delivery.status !== 200) return res.status(delivery.status).json({ error: delivery.error });
-
     const reference = genRef();
     const customerName = safeText(customer.name || req.user?.name || "", MAX_INPUT_LENGTH.name);
     const customerEmail = normalizeEmail(safeText(customer.email || req.user?.email || "", MAX_INPUT_LENGTH.email));
@@ -1295,9 +1407,15 @@ app.post("/api/orders/whatsapp", async (req, res) => {
     const shippingAddress = safeText(customer.address, MAX_INPUT_LENGTH.address);
     const customerNotes = safeText(customer.notes, MAX_INPUT_LENGTH.notes);
 
+    const promo = await applyPromoRules({ items: normalizedItems, subtotalAmount });
+    const discountedSubtotal = Math.max(0, subtotalAmount - Number(couponResult.discountAmount || 0) - Number(promo.promoDiscount || 0));
+    const pricedDelivery = await calculateDelivery({ deliveryZoneCode: customer.deliveryZoneCode, cartSubtotal: discountedSubtotal });
+    if (pricedDelivery.status !== 200) return res.status(pricedDelivery.status).json({ error: pricedDelivery.error });
+    const risk = computeRiskScore({ customerEmail, customerPhone, amount: pricedDelivery.grandTotal, isGuest: !req.user });
+
     const orderResult = await run(
-      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference, delivery_zone_code, delivery_zone_name, subtotal_amount, delivery_fee, discount_amount, coupon_code, coupon_id, grand_total)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference, delivery_zone_code, delivery_zone_name, subtotal_amount, delivery_fee, discount_amount, promo_discount_amount, promo_rule_ids, coupon_code, coupon_id, grand_total, risk_score, risk_level, risk_flags, manual_review_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user?.id || null,
         customerName,
@@ -1305,16 +1423,22 @@ app.post("/api/orders/whatsapp", async (req, res) => {
         customerPhone,
         shippingAddress,
         customerNotes,
-        delivery.grandTotal,
+        pricedDelivery.grandTotal,
         reference,
-        delivery.zone.code,
-        delivery.zone.name,
+        pricedDelivery.zone.code,
+        pricedDelivery.zone.name,
         subtotalAmount,
-        delivery.deliveryFee,
+        pricedDelivery.deliveryFee,
         Number(couponResult.discountAmount || 0),
+        Number(promo.promoDiscount || 0),
+        promo.appliedRuleIds.length ? JSON.stringify(promo.appliedRuleIds) : null,
         couponResult.coupon?.code || null,
         couponResult.coupon?.id || null,
-        delivery.grandTotal,
+        pricedDelivery.grandTotal,
+        risk.score,
+        risk.riskLevel,
+        JSON.stringify(risk.flags),
+        risk.manualReviewStatus,
       ]
     );
 
@@ -1346,14 +1470,16 @@ app.post("/api/orders/whatsapp", async (req, res) => {
       data: {
         orderId: orderResult.id,
         reference,
-        amount: delivery.grandTotal,
+        amount: pricedDelivery.grandTotal,
         subtotalAmount,
         discountAmount: Number(couponResult.discountAmount || 0),
+        promoDiscountAmount: Number(promo.promoDiscount || 0),
         couponCode: couponResult.coupon?.code || null,
-        deliveryFee: delivery.deliveryFee,
-        grandTotal: delivery.grandTotal,
-        deliveryZoneCode: delivery.zone.code,
-        deliveryZoneName: delivery.zone.name,
+        deliveryFee: pricedDelivery.deliveryFee,
+        grandTotal: pricedDelivery.grandTotal,
+        deliveryZoneCode: pricedDelivery.zone.code,
+        deliveryZoneName: pricedDelivery.zone.name,
+        riskLevel: risk.riskLevel,
         trackingUrl: `${BASE_URL}/track/${reference}`,
         items: normalizedItems,
         customerNotification: {
@@ -1381,7 +1507,7 @@ app.post("/api/checkout/initialize", async (req, res) => {
     if (productIds.length === 0) return res.status(400).json({ error: "No valid cart items" });
 
     const products = await all(
-      `SELECT id, name, price FROM products WHERE id IN (${productIds.map(() => "?").join(",")})`,
+      `SELECT id, name, category, price, stock_quantity FROM products WHERE id IN (${productIds.map(() => "?").join(",")})`,
       productIds
     );
     const productMap = new Map(products.map((p) => [p.id, p]));
@@ -1396,7 +1522,8 @@ app.post("/api/checkout/initialize", async (req, res) => {
     );
     if (!couponResult.valid) return res.status(400).json({ error: couponResult.error });
 
-    const discountedSubtotal = Math.max(0, subtotalAmount - Number(couponResult.discountAmount || 0));
+    const promo = await applyPromoRules({ items: normalizedItems, subtotalAmount });
+    const discountedSubtotal = Math.max(0, subtotalAmount - Number(couponResult.discountAmount || 0) - Number(promo.promoDiscount || 0));
     const delivery = await calculateDelivery({
       deliveryZoneCode: customer.deliveryZoneCode,
       cartSubtotal: discountedSubtotal,
@@ -1413,9 +1540,10 @@ app.post("/api/checkout/initialize", async (req, res) => {
     const shippingAddress = safeText(customer.address, MAX_INPUT_LENGTH.address);
     const customerNotes = safeText(customer.notes, MAX_INPUT_LENGTH.notes);
 
+    const risk = computeRiskScore({ customerEmail, customerPhone, amount: delivery.grandTotal, isGuest: !req.user });
     const orderResult = await run(
-      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference, delivery_zone_code, delivery_zone_name, subtotal_amount, delivery_fee, discount_amount, coupon_code, coupon_id, grand_total)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO orders (user_id, customer_name, customer_email, customer_phone, shipping_address, notes, amount, status, payment_reference, delivery_zone_code, delivery_zone_name, subtotal_amount, delivery_fee, discount_amount, promo_discount_amount, promo_rule_ids, coupon_code, coupon_id, grand_total, risk_score, risk_level, risk_flags, manual_review_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         req.user?.id || null,
         customerName,
@@ -1430,9 +1558,15 @@ app.post("/api/checkout/initialize", async (req, res) => {
         subtotalAmount,
         delivery.deliveryFee,
         Number(couponResult.discountAmount || 0),
+        Number(promo.promoDiscount || 0),
+        promo.appliedRuleIds.length ? JSON.stringify(promo.appliedRuleIds) : null,
         couponResult.coupon?.code || null,
         couponResult.coupon?.id || null,
         delivery.grandTotal,
+        risk.score,
+        risk.riskLevel,
+        JSON.stringify(risk.flags),
+        risk.manualReviewStatus,
       ]
     );
 
@@ -1503,6 +1637,7 @@ app.post("/api/checkout/initialize", async (req, res) => {
         amount: delivery.grandTotal,
         subtotalAmount,
         discountAmount: Number(couponResult.discountAmount || 0),
+        promoDiscountAmount: Number(promo.promoDiscount || 0),
         couponCode: couponResult.coupon?.code || null,
         deliveryFee: delivery.deliveryFee,
         grandTotal: delivery.grandTotal,
@@ -1717,6 +1852,7 @@ app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
       previousStatus: existing.status,
       nextStatus: status,
     });
+    await writeAuditLog(req, "order.status", "order", orderId, { previousStatus: existing.status, nextStatus: status });
     Promise.resolve(notifyOrderStatusChanged(updated, existing.status, status)).catch(() => {});
     res.json({ data: { ...updated, items } });
   } catch {
@@ -1816,6 +1952,347 @@ app.post("/api/jobs/low-stock-summary/run", async (req, res) => {
   }
 });
 
+app.post("/api/assistant/recommend", async (req, res) => {
+  try {
+    const query = safeText(req.body?.query, 400);
+    const rows = await all("SELECT * FROM products ORDER BY id DESC");
+    const heuristic = buildDeterministicAssistantReply(query, rows);
+    res.json({ data: heuristic });
+  } catch {
+    res.status(500).json({ error: "Assistant failed" });
+  }
+});
+
+app.post("/api/analytics/event", async (req, res) => {
+  try {
+    const eventType = safeText(req.body?.eventType, 60);
+    if (!eventType) return res.status(400).json({ error: "eventType is required" });
+    await run(
+      `INSERT INTO analytics_events (event_type, product_id, user_id, session_id, location, payload)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [eventType, Number(req.body?.productId) || null, req.user?.id || null, safeText(req.body?.sessionId, 120), safeText(req.body?.location, 120), JSON.stringify(req.body?.payload || {})]
+    );
+    res.status(201).json({ ok: true });
+  } catch {
+    res.status(500).json({ error: "Failed to save analytics event" });
+  }
+});
+
+app.get("/api/cart/restore/:token", async (req, res) => {
+  try {
+    const token = safeText(req.params.token, 120);
+    const snapshot = await get("SELECT payload, updated_at FROM cart_snapshots WHERE restore_token = ?", [token]);
+    if (!snapshot) return res.status(404).json({ error: "Restore token not found" });
+    let cart = [];
+    try { cart = JSON.parse(snapshot.payload || "[]"); } catch { cart = []; }
+    res.json({ data: { cart, updated_at: snapshot.updated_at } });
+  } catch {
+    res.status(500).json({ error: "Restore failed" });
+  }
+});
+
+app.post("/api/jobs/abandoned-carts/run", async (req, res) => {
+  const secret = String(process.env.ABANDONED_CART_JOB_SECRET || "").trim();
+  const supplied = safeText(req.headers["x-job-secret"] || req.query?.key || req.body?.key, 300);
+  if (!secret || supplied !== secret) return res.status(401).json({ error: "Unauthorized job trigger" });
+
+  try {
+    const minutes = Number(process.env.ABANDONED_CART_MINUTES || 60);
+    const snapshots = await all(
+      `SELECT * FROM cart_snapshots
+       WHERE datetime(updated_at) <= datetime('now', ?)
+       AND (abandoned_notified_at IS NULL)
+       ORDER BY updated_at ASC LIMIT 100`,
+      [`-${minutes} minutes`]
+    );
+
+    const sent = [];
+    for (const s of snapshots) {
+      if (!s.customer_email && !s.customer_phone) continue;
+      const token = s.restore_token || makeRestoreToken();
+      await run(`UPDATE cart_snapshots SET restore_token = COALESCE(restore_token, ?), abandoned_notified_at = CURRENT_TIMESTAMP WHERE id = ?`, [token, s.id]);
+      const restoreUrl = `${BASE_URL}/?restore=${token}`;
+      const channel = s.customer_email ? "email" : "whatsapp";
+      const recipient = s.customer_email || s.customer_phone;
+      await run(`INSERT INTO cart_recovery_logs (cart_snapshot_id, channel, recipient, status, payload) VALUES (?, ?, ?, 'queued', ?)`, [s.id, channel, recipient, JSON.stringify({ restoreUrl })]);
+      sent.push({ snapshotId: s.id, channel, recipient, restoreUrl });
+    }
+
+    res.json({ ok: true, data: { scanned: snapshots.length, queued: sent.length, reminders: sent } });
+  } catch {
+    res.status(500).json({ error: "Abandoned cart job failed" });
+  }
+});
+
+app.get("/api/admin/audit-logs", requireAdmin, requireAdminRole("manager"), async (req, res) => {
+  try {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit || 50)));
+    const rows = await all("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?", [limit]);
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch audit logs" });
+  }
+});
+
+app.get("/api/admin/promos", requireAdmin, requireAdminRole("manager"), async (_, res) => {
+  try {
+    const rows = await all("SELECT * FROM promo_rules ORDER BY id DESC");
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to load promo rules" });
+  }
+});
+
+app.post("/api/admin/promos", requireAdmin, requireAdminRole("manager"), async (req, res) => {
+  try {
+    const payload = {
+      name: safeText(req.body?.name, 120),
+      rule_type: safeText(req.body?.rule_type, 20) || "discount",
+      category: normalizeCategory(req.body?.category),
+      min_cart_amount: Number(req.body?.min_cart_amount) || 0,
+      discount_type: safeText(req.body?.discount_type, 20) || "fixed",
+      discount_value: Number(req.body?.discount_value) || 0,
+      bogo_product_id: Number(req.body?.bogo_product_id) || null,
+      bogo_buy_qty: Number(req.body?.bogo_buy_qty) || 1,
+      bogo_get_qty: Number(req.body?.bogo_get_qty) || 1,
+      starts_at: safeText(req.body?.starts_at, 40) || null,
+      ends_at: safeText(req.body?.ends_at, 40) || null,
+      is_active: req.body?.is_active === undefined ? 1 : (req.body?.is_active ? 1 : 0),
+    };
+
+    const created = await run(
+      `INSERT INTO promo_rules (name, rule_type, category, min_cart_amount, discount_type, discount_value, bogo_product_id, bogo_buy_qty, bogo_get_qty, starts_at, ends_at, is_active, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      [payload.name, payload.rule_type, payload.category || null, payload.min_cart_amount, payload.discount_type, payload.discount_value, payload.bogo_product_id, payload.bogo_buy_qty, payload.bogo_get_qty, payload.starts_at, payload.ends_at, payload.is_active]
+    );
+    await writeAuditLog(req, "promo.create", "promo_rule", created.id, payload);
+    const row = await get("SELECT * FROM promo_rules WHERE id = ?", [created.id]);
+    res.status(201).json({ data: row });
+  } catch {
+    res.status(500).json({ error: "Failed to create promo rule" });
+  }
+});
+
+app.patch("/api/admin/promos/:id/toggle", requireAdmin, requireAdminRole("manager"), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const next = req.body?.is_active ? 1 : 0;
+    await run(`UPDATE promo_rules SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [next, id]);
+    await writeAuditLog(req, "promo.toggle", "promo_rule", id, { is_active: next });
+    const row = await get("SELECT * FROM promo_rules WHERE id = ?", [id]);
+    res.json({ data: row });
+  } catch {
+    res.status(500).json({ error: "Failed to toggle promo rule" });
+  }
+});
+
+app.get("/api/admin/analytics/advanced", requireAdmin, requireAdminRole("manager"), async (_, res) => {
+  try {
+    const [views, carts, checkouts, ordersCount, topProducts, repeatBuyers, locationBreakdown] = await Promise.all([
+      get("SELECT COUNT(*) AS total FROM analytics_events WHERE event_type = 'view_product'"),
+      get("SELECT COUNT(*) AS total FROM analytics_events WHERE event_type = 'add_to_cart'"),
+      get("SELECT COUNT(*) AS total FROM analytics_events WHERE event_type = 'checkout_start'"),
+      get("SELECT COUNT(*) AS total FROM orders"),
+      all(`SELECT oi.product_id, oi.product_name, COUNT(*) AS order_lines, SUM(oi.quantity) AS qty FROM order_items oi JOIN orders o ON o.id = oi.order_id GROUP BY oi.product_id, oi.product_name ORDER BY qty DESC LIMIT 10`),
+      all(`SELECT customer_email, COUNT(*) AS orders_count FROM orders WHERE customer_email != '' GROUP BY customer_email HAVING COUNT(*) > 1 ORDER BY orders_count DESC LIMIT 20`),
+      all(`SELECT COALESCE(delivery_zone_name, 'Unknown') AS location, COUNT(*) AS total FROM orders GROUP BY COALESCE(delivery_zone_name, 'Unknown') ORDER BY total DESC`),
+    ]);
+
+    res.json({
+      data: {
+        funnel: {
+          views: Number(views?.total || 0),
+          cartAdds: Number(carts?.total || 0),
+          checkoutStarts: Number(checkouts?.total || 0),
+          orders: Number(ordersCount?.total || 0),
+        },
+        topConvertingProducts: topProducts,
+        repeatBuyers,
+        locationBreakdown,
+      },
+    });
+  } catch {
+    res.status(500).json({ error: "Failed to build advanced analytics" });
+  }
+});
+
+app.get("/api/me/addresses", requireUser, async (req, res) => {
+  const rows = await all("SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC", [req.user.id]);
+  res.json({ data: rows });
+});
+
+app.post("/api/me/addresses", requireUser, async (req, res) => {
+  try {
+    const isDefault = req.body?.is_default ? 1 : 0;
+    if (isDefault) await run("UPDATE user_addresses SET is_default = 0 WHERE user_id = ?", [req.user.id]);
+    const created = await run(
+      `INSERT INTO user_addresses (user_id, label, recipient_name, phone, address_line, city, state, is_default, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      [req.user.id, safeText(req.body?.label, 50), safeText(req.body?.recipient_name, 120), safeText(req.body?.phone, 30), safeText(req.body?.address_line, 300), safeText(req.body?.city, 80), safeText(req.body?.state, 80), isDefault]
+    );
+    const row = await get("SELECT * FROM user_addresses WHERE id = ?", [created.id]);
+    res.status(201).json({ data: row });
+  } catch {
+    res.status(500).json({ error: "Failed to add address" });
+  }
+});
+
+app.post("/api/orders/:id/reorder", requireUser, async (req, res) => {
+  try {
+    const orderId = Number(req.params.id);
+    const order = await get("SELECT * FROM orders WHERE id = ? AND user_id = ?", [orderId, req.user.id]);
+    if (!order) return res.status(404).json({ error: "Order not found" });
+    const items = await all("SELECT product_id, quantity FROM order_items WHERE order_id = ?", [orderId]);
+    const cart = items.map((i) => ({ productId: i.product_id, quantity: i.quantity }));
+    res.json({ data: { cart, sourceOrderId: orderId } });
+  } catch {
+    res.status(500).json({ error: "Failed to reorder" });
+  }
+});
+
+app.get("/api/me/loyalty", requireUser, async (req, res) => {
+  try {
+    const [user, ledger] = await Promise.all([
+      get("SELECT referral_code, total_loyalty_points FROM users WHERE id = ?", [req.user.id]),
+      all("SELECT * FROM loyalty_ledger WHERE user_id = ? ORDER BY id DESC LIMIT 100", [req.user.id]),
+    ]);
+    res.json({ data: { totalPoints: Number(user?.total_loyalty_points || 0), referralCode: user?.referral_code || null, ledger } });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch loyalty" });
+  }
+});
+
+app.post("/api/returns", requireUser, async (req, res) => {
+  try {
+    const orderId = Number(req.body?.orderId);
+    const order = await get("SELECT id, user_id FROM orders WHERE id = ?", [orderId]);
+    if (!order || order.user_id !== req.user.id) return res.status(404).json({ error: "Order not found" });
+
+    const created = await run(
+      `INSERT INTO return_requests (order_id, user_id, reason, status, updated_at) VALUES (?, ?, ?, 'requested', CURRENT_TIMESTAMP)`,
+      [orderId, req.user.id, safeText(req.body?.reason, 1000)]
+    );
+    await run(`INSERT INTO return_request_timeline (return_request_id, action, actor, note) VALUES (?, 'requested', 'customer', ?)`, [created.id, safeText(req.body?.reason, 1000)]);
+    const row = await get("SELECT * FROM return_requests WHERE id = ?", [created.id]);
+    res.status(201).json({ data: row });
+  } catch {
+    res.status(500).json({ error: "Failed to create return request" });
+  }
+});
+
+app.get("/api/admin/returns", requireAdmin, requireAdminRole("inventory_staff"), async (_, res) => {
+  try {
+    const rows = await all("SELECT * FROM return_requests ORDER BY id DESC");
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch return requests" });
+  }
+});
+
+app.patch("/api/admin/returns/:id", requireAdmin, requireAdminRole("manager"), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const next = safeText(req.body?.status, 30);
+    const allowed = new Set(["approved", "rejected", "received", "refunded"]);
+    if (!allowed.has(next)) return res.status(400).json({ error: "Invalid status" });
+    await run("UPDATE return_requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [next, id]);
+    await run(`INSERT INTO return_request_timeline (return_request_id, action, actor, note) VALUES (?, ?, ?, ?)`, [id, next, req.admin?.role || "admin", safeText(req.body?.note, 800)]);
+    await writeAuditLog(req, "return.update", "return_request", id, { status: next });
+    const row = await get("SELECT * FROM return_requests WHERE id = ?", [id]);
+    res.json({ data: row });
+  } catch {
+    res.status(500).json({ error: "Failed to update return request" });
+  }
+});
+
+app.get("/api/admin/orders/risk-queue", requireAdmin, requireAdminRole("inventory_staff"), async (req, res) => {
+  try {
+    const level = safeText(req.query.level, 20).toLowerCase();
+    const rows = level
+      ? await all("SELECT * FROM orders WHERE risk_level = ? ORDER BY id DESC", [level])
+      : await all("SELECT * FROM orders WHERE manual_review_status = 'queued' ORDER BY id DESC");
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch risk queue" });
+  }
+});
+
+app.patch("/api/admin/orders/:id/review", requireAdmin, requireAdminRole("manager"), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const status = safeText(req.body?.manual_review_status, 30);
+    const allowed = new Set(["queued", "approved", "rejected", "clear"]);
+    if (!allowed.has(status)) return res.status(400).json({ error: "Invalid review status" });
+    await run("UPDATE orders SET manual_review_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [status, id]);
+    await writeAuditLog(req, "order.review", "order", id, { manual_review_status: status });
+    const row = await get("SELECT * FROM orders WHERE id = ?", [id]);
+    res.json({ data: row });
+  } catch {
+    res.status(500).json({ error: "Failed to update review status" });
+  }
+});
+
+app.get("/api/inventory/locations", async (_, res) => {
+  try {
+    const rows = await all("SELECT * FROM inventory_locations WHERE is_active = 1 ORDER BY id ASC");
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch locations" });
+  }
+});
+
+app.get("/api/admin/inventory/:productId", requireAdmin, requireAdminRole("inventory_staff"), async (req, res) => {
+  try {
+    const productId = Number(req.params.productId);
+    const rows = await all(
+      `SELECT pi.*, il.code, il.name, il.eta_days
+       FROM product_inventory pi
+       JOIN inventory_locations il ON il.id = pi.location_id
+       WHERE pi.product_id = ?
+       ORDER BY il.id ASC`,
+      [productId]
+    );
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to fetch product inventory" });
+  }
+});
+
+app.post("/api/admin/inventory/:productId", requireAdmin, requireAdminRole("inventory_staff"), async (req, res) => {
+  try {
+    const productId = Number(req.params.productId);
+    const locationCode = safeText(req.body?.locationCode, 60).toLowerCase();
+    const quantity = Math.max(0, Number(req.body?.quantity) || 0);
+
+    const location = await get("SELECT id FROM inventory_locations WHERE code = ?", [locationCode]);
+    if (!location) return res.status(400).json({ error: "Invalid locationCode" });
+
+    await run(
+      `INSERT INTO product_inventory (product_id, location_id, quantity, updated_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(product_id, location_id) DO UPDATE SET quantity = excluded.quantity, updated_at = CURRENT_TIMESTAMP`,
+      [productId, location.id, quantity]
+    );
+
+    const total = await get("SELECT COALESCE(SUM(quantity),0) AS total FROM product_inventory WHERE product_id = ?", [productId]);
+    await run("UPDATE products SET stock_quantity = ?, in_stock = CASE WHEN ? > 0 THEN 1 ELSE 0 END WHERE id = ?", [Number(total?.total || 0), Number(total?.total || 0), productId]);
+    await writeAuditLog(req, "inventory.set", "product", productId, { locationCode, quantity });
+
+    const rows = await all(
+      `SELECT pi.*, il.code, il.name, il.eta_days
+       FROM product_inventory pi
+       JOIN inventory_locations il ON il.id = pi.location_id
+       WHERE pi.product_id = ?
+       ORDER BY il.id ASC`,
+      [productId]
+    );
+
+    res.json({ data: rows });
+  } catch {
+    res.status(500).json({ error: "Failed to update product inventory" });
+  }
+});
+
 app.get("/api/admin/orders/export.csv", requireAdmin, async (_, res) => {
   try {
     const rows = await all("SELECT * FROM orders ORDER BY created_at DESC");
@@ -1891,7 +2368,20 @@ app.get("/signup", (_, res) => {
   });
 });
 
-initDb().then(() => {
+initDb().then(async () => {
+  await ensureAdvancedSchema({ run, all });
+
+  const seedAdminEmail = normalizeEmail(process.env.SEED_ADMIN_EMAIL || "");
+  const seedAdminPassword = String(process.env.SEED_ADMIN_PASSWORD || "");
+  if (seedAdminEmail && seedAdminPassword) {
+    const existing = await get("SELECT id FROM admin_users WHERE email = ?", [seedAdminEmail]);
+    if (!existing) {
+      const hash = await bcrypt.hash(seedAdminPassword, 12);
+      await run(`INSERT INTO admin_users (name, email, password_hash, role, is_active, updated_at) VALUES (?, ?, ?, 'super_admin', 1, CURRENT_TIMESTAMP)`, ["Seed Admin", seedAdminEmail, hash]);
+      console.log(`[seed] created admin user ${seedAdminEmail}`);
+    }
+  }
+
   app.listen(PORT, () => {
     console.log(`Vicbest Store running on http://localhost:${PORT}`);
     console.log(`SQLite DB: ${dbPath}`);
