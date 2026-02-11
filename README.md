@@ -226,8 +226,7 @@ openclaw cron create --name vicbest-low-stock --schedule "0 8 * * *" --cwd "C:\U
 ## Advanced Suite Summary
 
 This build now includes:
-- AI storefront assistant widget + recommendation endpoint
-- Promo rule engine with admin controls and checkout integration
+- Personalized recommendation endpoint and storefront rails`r`n- Promo rule engine with admin controls and checkout integration
 - Abandoned-cart recovery tokens and job endpoint
 - Role-based admin (`super_admin`, `manager`, `inventory_staff`) + audit logs
 - Advanced analytics endpoints (funnel/top products/repeat buyers/location)
@@ -248,3 +247,4 @@ This build now includes:
 - [ ] Admin can add order note and sees timeline updates for note + status change
 - [ ] Public tracking page `/track/:reference` shows status + key details
 - [ ] Orders CSV export includes `discount_amount` and `coupon_code`
+

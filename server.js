@@ -6,7 +6,7 @@ const express = require("express");
 const path = require("path");
 const { initDb, all, get, run, dbPath, getStartupWarnings } = require("./db");
 const { notifyNewOrder, notifyOrderStatusChanged, notifyAdminLowStockSummary } = require("./notifications");
-const { ensureAdvancedSchema, buildDeterministicAssistantReply, makeRestoreToken } = require("./advanced");
+const { ensureAdvancedSchema, makeRestoreToken } = require("./advanced");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1949,17 +1949,6 @@ app.post("/api/jobs/low-stock-summary/run", async (req, res) => {
     res.json({ ok: true, data: { summary, notification: result } });
   } catch {
     res.status(500).json({ error: "Failed to run scheduled low-stock summary" });
-  }
-});
-
-app.post("/api/assistant/recommend", async (req, res) => {
-  try {
-    const query = safeText(req.body?.query, 400);
-    const rows = await all("SELECT * FROM products ORDER BY id DESC");
-    const heuristic = buildDeterministicAssistantReply(query, rows);
-    res.json({ data: heuristic });
-  } catch {
-    res.status(500).json({ error: "Assistant failed" });
   }
 });
 
